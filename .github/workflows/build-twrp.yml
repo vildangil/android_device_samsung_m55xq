@@ -160,7 +160,12 @@ jobs:
           ccache -z
           export PATH="$JAVA_HOME/bin:$PATH"
           export LC_ALL=C
+          # Some recovery device vendorsetup.sh files return 1 when skipped.
+          # Don't let errexit terminate envsetup before lunch is defined.
+          set +e
           source build/envsetup.sh
+          set -e
+          type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
           lunch twrp_m55xq-eng
           mka recoveryimage -j"$(nproc)" 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
           ccache -s
