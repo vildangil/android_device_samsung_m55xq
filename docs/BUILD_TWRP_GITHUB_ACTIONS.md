@@ -35,54 +35,60 @@ No phone files are necessary to start the build. If decryption still fails, prov
 
 ## Telegram progress (kernel_builder style)
 
-The Telegram integration mirrors the `vildangil/kernel_builder` notification flow.
-It reports:
+Notifications now use the **same message format** as `vildangil/kernel_builder`:
+every line starts with `gh <run_number>_<attempt>:`, multiple lines are passed
+as `%nl`, and the ordinary status messages are not wrapped in bold headers.
 
-- Workflow start, selected device tree and optional **NOTES**.
-- Environment initialization, host/CPU/free disk (when **VERBOSE** is enabled).
-- Source sync start and duration.
-- Device tree branch/commit and compilation start.
-- Successful image compilation, timing, SHA256 and upload progress.
-- Final success/failure with total duration, failing stage and GitHub Actions link.
-- The failure build log (`twrp-build.log.gz`) is sent automatically if available.
-- Optionally, the **Odin TAR** and `SHA256SUMS` are sent directly to the chat.
+Representative sequence:
 
-The Telegram helper lives at `.github/scripts/telegram-notify.sh` and supports
-`msg`, `up` (document upload), and `escape` commands. Notifications are
-best-effort and do not mark the recovery build as failed if Telegram is down.
+```text
+gh 5_1: workflow started
+gh 5_1: build env initialized
+gh 5_1: host: "Ubuntu 22.04.5 LTS"
+gh 5_1: free disk space: 77000M
+gh 5_1: cloning recovery source
+gh 5_1: repo: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp
+gh 5_1: branch: twrp-12.1
+gh 5_1: recovery name: TWRP
+gh 5_1: recovery ver: 12.1
+gh 5_1: recovery head commit: <hash>
+gh 5_1: device: m55xq
+gh 5_1: running compilation script(s): recoveryimage
+gh 5_1: workflow ended in 35m, 10s
+```
 
-### Configure
+Values above are examples, not an actual successful build. On failure,
+the final message uses `gh 5_1: workflow failed in 35m, 10s`.
 
-Open repository **Settings → Secrets and variables → Actions**, and set:
+Successful Telegram Odin TAR upload uses a caption modeled on the kernel
+builder's `.info` file: compilation duration, `md5: <code>...</code>`,
+and recovery version/device. `SHA256SUMS` is also uploaded. If the
+recovery build or source sync fails, a compressed log is sent instead.
+Large archives are split into pieces supported by the hosted Telegram Bot API.
 
-- `BOT_TOKEN`: the same bot token used in the kernel_builder project.
-- `CHAT_ID`: the default Telegram group/channel/chat destination.
+### Configuration
 
-These must be configured **again in this repository**, as repository secrets
-are not shared automatically. Never commit or send the bot token in chat.
+Configure these **repository Actions secrets**:
 
-When you click **Run workflow**, you can set these optional inputs:
+- `BOT_TOKEN`: Telegram bot token (same as kernel_builder if desired).
+- `CHAT_ID`: default chat or channel ID.
+
+They are **not automatically shared** from kernel_builder. Never place tokens
+in the workflow YAML or send them in chat.
+
+Manual workflow inputs:
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `NOTES` | empty | Optional comment sent to the chat (first 650 chars) |
-| `TG_RECIPENT` | empty | Override `CHAT_ID` for this run; same spelling as kernel_builder |
-| `VERBOSE` | true | Include environment/device metadata |
-| `TG_UPLOAD` | true | Send recovery Odin TAR and SHA256SUMS to Telegram |
+| `NOTES` | empty | Plain-text note sent with the build's gh prefix |
+| `TG_RECIPENT` | empty | Optional chat ID override (same spelling as kernel_builder) |
+| `VERBOSE` | true | Send the environment and source details |
+| `TG_UPLOAD` | true | Upload Odin TAR and SHA256SUMS to Telegram |
 
-For file transfer the hosted Telegram Bot API has a file size limit. If
-`twrp-m55xq-odin.tar` exceeds 49 MB, the helper splits it into 45 MB
-pieces and sends all the parts. Download every part and reconstruct the
-archive in filename order with:
+The helper `.github/scripts/telegram-notify.sh` accepts `msg`, `up`,
+`upload`, and `escape`; it uses Telegram HTML parse mode and translates
+`%nl` for the message text and document captions, as in kernel_builder.
 
-```bash
-cat twrp-m55xq-odin.tar.part-* > twrp-m55xq-odin.tar
-sha256sum -c SHA256SUMS
-```
-
-The complete `recovery.img`, Odin TAR, and checksums remain available in the
-GitHub Actions artifact regardless of Telegram upload success. A file sent
-to Telegram is still **untested**, not guaranteed bootable or decrypt-capable.
-
-Already-running jobs do not receive new notification steps retroactively;
-start a **new** build from the `android-12.1` workflow branch to use this.
+GitHub Actions artifacts remain the reliable download source. Telegram
+errors are nonfatal and do not affect compilation. Running workflows retain
+their original snapshot: start a **new** run after these changes.
