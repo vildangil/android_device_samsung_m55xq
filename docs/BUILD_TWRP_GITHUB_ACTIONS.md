@@ -31,3 +31,31 @@ This workflow has not been validated by a successful run yet. A successful compi
 Do **not** format `/data` or `/metadata` to make an encrypted volume mount. Formatting can permanently destroy access to your files.
 
 No phone files are necessary to start the build. If decryption still fails, provide a sanitized `/tmp/recovery.log` and `adb logcat -b all -d` from the running recovery, plus Android / One UI versions. Do not share screen unlock credentials or private encryption keys.
+
+
+## Telegram status messages
+
+The workflow can report start, source-sync completion, compilation start, and
+success/failure (including elapsed time and the GitHub Actions run URL) to Telegram.
+Notifications are best-effort: Telegram failures do not fail the recovery build.
+
+This follows the pattern used by the `vildangil/kernel_builder` workflow, but
+uses a separate helper at `.github/scripts/telegram-notify.sh`.
+
+**One-time setup for this repository:**
+
+1. Open repository **Settings → Secrets and variables → Actions**.
+2. Create a **repository secret** named `BOT_TOKEN` with the token for your Telegram bot.
+3. Create a **repository secret** named `CHAT_ID` with the group/channel ID or private chat ID. Add the bot to the target group/channel and grant posting permissions if necessary.
+4. Start a **new** Build TWRP workflow run from the `android-12.1` branch.
+
+GitHub secrets are scoped per repository: values in `kernel_builder` are **not**
+automatically available here. Do not put the bot token into the YAML file, a
+workflow input, a commit, or a shared build log. Do not send the bot token in chat.
+
+Without both secrets, the recovery build still runs but notification steps skip
+sending messages. The workflow only sends build status and a link to the GitHub
+Actions artifacts, **not** the recovery image itself.
+
+Already running workflows use their original workflow snapshot and will not
+gain notifications retroactively.
