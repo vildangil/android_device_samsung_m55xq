@@ -165,8 +165,18 @@ jobs:
           repo init --depth=1 \
             -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
             -b twrp-12.1
-          repo sync -c --force-sync --no-clone-bundle --no-tags \
-            --optimized-fetch --prune -j"$(nproc)"
+          # Upstream android.googlesource.com sometimes returns HTTP 503.
+          # repo sync is incremental; retries reuse already-downloaded projects.
+          SYNC_ARGS=( -c --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune )
+          if ! repo sync "${SYNC_ARGS[@]}" -j"$(nproc)" 2>&1 | tee "$RUNNER_TEMP/twrp-sync.log"; then
+            echo "::warning::Initial repo sync failed; retrying remaining projects in 20 seconds"
+            sleep 20
+            if ! repo sync "${SYNC_ARGS[@]}" -j2 2>&1 | tee -a "$RUNNER_TEMP/twrp-sync.log"; then
+              echo "::warning::Second repo sync failed; final retry with one network job"
+              sleep 40
+              repo sync "${SYNC_ARGS[@]}" -j1 --fail-fast 2>&1 | tee -a "$RUNNER_TEMP/twrp-sync.log"
+            fi
+          fi
           df -h /
 
       - name: Telegram - sources synced
@@ -289,6 +299,7 @@ jobs:
           name: twrp-m55xq-failure-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/twrp-build.log
+            ${{ runner.temp }}/twrp-sync.log
             twrp/out/verbose.log.gz
           if-no-files-found: warn
           retention-days: 7
@@ -320,6 +331,11 @@ jobs:
             gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
             bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" \
               "gh $RUN_NUM: failed TWRP build log"
+          fi
+          if [[ -s "$RUNNER_TEMP/twrp-sync.log" && ! -f "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-sync.log" > "$RUNNER_TEMP/twrp-sync.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-sync.log.gz" \
+              "gh $RUN_NUM: failed source sync log"
           fi
 
       - name: Telegram - final result
