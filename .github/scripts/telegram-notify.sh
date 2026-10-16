@@ -33,9 +33,11 @@ check_reply() {
 
 send_message() {
   local msg="${1:-}"
-  # kernel_builder uses %nl for deliberate line breaks in Telegram messages.
-  msg="${msg//%nl/
-  local reply
+  local nl reply
+  # Match kernel_builder: %nl becomes a real newline (not an HTML break).
+  printf -v nl '\012'
+  msg="${msg//%nl/$nl}"
+  [[ -n "$msg" ]] || return 0
   if ! reply=$(curl --silent --fail --retry 2 --max-time 25 \
     -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=$recipient" \
@@ -50,7 +52,9 @@ send_message() {
 
 send_single_document() {
   local path="$1" caption="$2"
-  caption="${caption//%nl/
+  local nl reply
+  printf -v nl '\012'
+  caption="${caption//%nl/$nl}"
   if ! reply=$(curl --silent --fail --retry 2 --retry-delay 2 --max-time 300 \
     -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
     -F "chat_id=$recipient" \
