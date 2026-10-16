@@ -11,6 +11,26 @@ on:
         options:
           - fix/twrp-fbe-preflight
           - android-12.1
+      NOTES:
+        description: Optional note to include in Telegram updates
+        required: false
+        type: string
+        default: ''
+      TG_RECIPENT:
+        description: Override Telegram chat ID (empty = CHAT_ID secret)
+        required: false
+        type: string
+        default: ''
+      VERBOSE:
+        description: Send extra environment and source details
+        required: true
+        type: boolean
+        default: true
+      TG_UPLOAD:
+        description: Send Odin TAR and SHA256SUMS to Telegram
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -31,6 +51,10 @@ jobs:
       CCACHE_COMPRESS: "1"
       ALLOW_MISSING_DEPENDENCIES: "true"
       JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+      TG_RECIPENT: ${{ inputs.TG_RECIPENT }}
+      TG_VERBOSE: ${{ inputs.VERBOSE }}
+      TG_UPLOAD: ${{ inputs.TG_UPLOAD }}
+      RUN_NUM: ${{ github.run_number }}_${{ github.run_attempt }}
 
     steps:
       - name: Check out CI helpers
@@ -40,18 +64,23 @@ jobs:
           path: ci_helpers
           persist-credentials: false
 
-      - name: Telegram - build started
+      - name: Telegram - workflow started and notes
         shell: bash
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          TREE_REF: ${{ inputs.tree_ref }}
+          NOTES: ${{ inputs.NOTES }}
         run: |
           echo "TG_BUILD_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-          MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nStatus: started\nRun: <code>#%s</code> (attempt %s)\nTree: <code>%s</code>\n<a href="%s/%s/actions/runs/%s">Open GitHub Actions</a>' \
-            "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" "$TREE_REF" \
-            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          bash "$TG" msg "gh $RUN_NUM: workflow started
+          recovery: TWRP / m55xq
+          device tree: ${{ inputs.tree_ref }}
+          run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [[ -n "$NOTES" ]]; then
+            NOTE_ESCAPED=$(bash "$TG" escape "${NOTES:0:650}")
+            bash "$TG" msg "gh $RUN_NUM: <b>notes:</b> $NOTE_ESCAPED"
+          fi
 
       - name: Check out selected device tree
         uses: actions/checkout@v4
@@ -98,6 +127,34 @@ jobs:
           restore-keys: |
             m55xq-twrp12-${{ runner.os }}-
 
+      - name: Telegram - build environment ready
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ "$TG_VERBOSE" == "true" ]]; then
+            OS=$(grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2- | tr -d '"')
+            FREE=$(df -m --output=avail / | tail -1 | tr -d ' ')
+            bash "$TG" msg "gh $RUN_NUM: build env initialized
+            host: $OS
+            free disk space: ${FREE} MB
+            runner CPUs: $(nproc)"
+          fi
+
+      - name: Telegram - syncing recovery source
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo "TG_SYNC_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          bash "$TG" msg "gh $RUN_NUM: cloning recovery source
+          manifest: minimal-manifest-twrp/platform_manifest_twrp_aosp
+          branch: twrp-12.1"
+
       - name: Initialize and sync minimal TWRP 12.1 sources
         id: sync
         shell: bash
@@ -118,9 +175,9 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: sources synced, preparing device tree.\n<a href="%s/%s/actions/runs/%s">Build status</a>' \
-            "$GITHUB_RUN_NUMBER" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          SYNC_TIME=$(( $(date +%s) - TG_SYNC_STARTED ))
+          bash "$TG" msg "gh $RUN_NUM: source sync completed in $((SYNC_TIME / 60))m $((SYNC_TIME % 60))s"
 
       - name: Install M55 and Qualcomm recovery trees
         id: device
@@ -139,15 +196,23 @@ jobs:
           test -f "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
           test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
 
-      - name: Telegram - compilation started
+      - name: Telegram - device info and compilation
         shell: bash
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          TREE_REF: ${{ inputs.tree_ref }}
         run: |
-          MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: compilation started (<code>recoveryimage</code>).\n<a href="%s/%s/actions/runs/%s">Build status</a>' \
-            "$GITHUB_RUN_NUMBER" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          if [[ "$TG_VERBOSE" == "true" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: device m55xq
+            tree branch: $TREE_REF
+            tree commit: <code>$DEVICE_SHA</code>
+            source: TWRP 12.1"
+          fi
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          bash "$TG" msg "gh $RUN_NUM: running compilation script(s): recoveryimage"
 
       - name: Build recovery.img
         id: compile
@@ -160,14 +225,16 @@ jobs:
           ccache -z
           export PATH="$JAVA_HOME/bin:$PATH"
           export LC_ALL=C
-          # Some recovery device vendorsetup.sh files return 1 when skipped.
-          # Don't let errexit terminate envsetup before lunch is defined.
-          set +e
-          source build/envsetup.sh
-          set -e
-          type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
-          lunch twrp_m55xq-eng
-          mka recoveryimage -j"$(nproc)" 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          # Capture setup and compilation failures in one log.
+          {
+            # Some device vendorsetup.sh files return 1 even when successfully sourced.
+            set +e
+            source build/envsetup.sh
+            set -e
+            type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
+            lunch twrp_m55xq-eng
+            mka recoveryimage -j"$(nproc)"
+          } 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
           ccache -s
           df -h /
 
@@ -192,6 +259,19 @@ jobs:
           ls -lh
           cat SHA256SUMS
 
+      - name: Telegram - build output ready
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+          HASH=$(sha256sum "$GITHUB_WORKSPACE/artifacts/recovery.img" | cut -d' ' -f1)
+          bash "$TG" msg "gh $RUN_NUM: recoveryimage compiled in $((COMPILE_TIME / 60))m $((COMPILE_TIME % 60))s
+          image SHA256: <code>$HASH</code>
+          uploading artifacts..."
+
       - name: Upload recovery
         id: upload
         uses: actions/upload-artifact@v4
@@ -214,6 +294,34 @@ jobs:
           retention-days: 7
           compression-level: 1
 
+      - name: Telegram - upload recovery and checksums
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          bash "$TG" msg "gh $RUN_NUM: uploading Odin TAR and checksums to Telegram"
+          bash "$TG" up "$GITHUB_WORKSPACE/artifacts/twrp-m55xq-odin.tar" \
+            "gh $RUN_NUM: TWRP m55xq Odin TAR (untested)"
+          bash "$TG" up "$GITHUB_WORKSPACE/artifacts/SHA256SUMS" \
+            "gh $RUN_NUM: SHA256SUMS"
+
+      - name: Telegram - send failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ -s "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" \
+              "gh $RUN_NUM: failed TWRP build log"
+          fi
+
       - name: Telegram - final result
         if: ${{ always() }}
         shell: bash
@@ -235,8 +343,8 @@ jobs:
             DURATION="unavailable"
           fi
           if [[ "$JOB_RESULT" == "success" ]]; then
-            MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: SUCCESS\nDuration: %s\nArtifact: <code>twrp-m55xq-%s</code>\n<a href="%s/%s/actions/runs/%s">Download recovery.img / Odin TAR</a>' \
-              "$GITHUB_RUN_NUMBER" "$DURATION" "$GITHUB_RUN_NUMBER" \
+            MESSAGE=$(printf 'gh %s: workflow ended in %s\nstatus: <b>SUCCESS</b>\nartifact: <code>twrp-m55xq-%s</code>\n<a href="%s/%s/actions/runs/%s">Download from GitHub Actions</a>' \
+              "$RUN_NUM" "$DURATION" "$GITHUB_RUN_NUMBER" \
               "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
           else
             STAGE="environment / checkout"
@@ -246,8 +354,8 @@ jobs:
             elif [[ "$PACKAGE_OUTCOME" == "failure" ]]; then STAGE="image packaging"
             elif [[ "$UPLOAD_OUTCOME" == "failure" ]]; then STAGE="artifact upload"
             fi
-            MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: %s\nStage: %s\nDuration: %s\n<a href="%s/%s/actions/runs/%s">Open logs</a>' \
-              "$GITHUB_RUN_NUMBER" "$JOB_RESULT" "$STAGE" "$DURATION" \
+            MESSAGE=$(printf 'gh %s: workflow %s in %s\nstage: %s\n<a href="%s/%s/actions/runs/%s">Open build logs</a>' \
+              "$RUN_NUM" "$JOB_RESULT" "$DURATION" "$STAGE" \
               "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
           fi
           bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
