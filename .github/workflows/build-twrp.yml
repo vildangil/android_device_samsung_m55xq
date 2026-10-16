@@ -33,6 +33,26 @@ jobs:
       JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
 
     steps:
+      - name: Check out CI helpers
+        uses: actions/checkout@v4
+        with:
+          ref: android-12.1
+          path: ci_helpers
+          persist-credentials: false
+
+      - name: Telegram - build started
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TREE_REF: ${{ inputs.tree_ref }}
+        run: |
+          echo "TG_BUILD_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nStatus: started\nRun: <code>#%s</code> (attempt %s)\nTree: <code>%s</code>\n<a href="%s/%s/actions/runs/%s">Open GitHub Actions</a>' \
+            "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" "$TREE_REF" \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
+
       - name: Check out selected device tree
         uses: actions/checkout@v4
         with:
@@ -79,6 +99,7 @@ jobs:
             m55xq-twrp12-${{ runner.os }}-
 
       - name: Initialize and sync minimal TWRP 12.1 sources
+        id: sync
         shell: bash
         run: |
           set -euxo pipefail
@@ -91,7 +112,18 @@ jobs:
             --optimized-fetch --prune -j"$(nproc)"
           df -h /
 
+      - name: Telegram - sources synced
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: sources synced, preparing device tree.\n<a href="%s/%s/actions/runs/%s">Build status</a>' \
+            "$GITHUB_RUN_NUMBER" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
+
       - name: Install M55 and Qualcomm recovery trees
+        id: device
         shell: bash
         run: |
           set -euxo pipefail
@@ -107,7 +139,18 @@ jobs:
           test -f "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
           test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
 
+      - name: Telegram - compilation started
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: compilation started (<code>recoveryimage</code>).\n<a href="%s/%s/actions/runs/%s">Build status</a>' \
+            "$GITHUB_RUN_NUMBER" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
+
       - name: Build recovery.img
+        id: compile
         shell: bash
         run: |
           set -eo pipefail
@@ -124,6 +167,7 @@ jobs:
           df -h /
 
       - name: Verify image and create Odin archive
+        id: package
         shell: bash
         run: |
           set -euxo pipefail
@@ -144,6 +188,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload recovery
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: twrp-m55xq-${{ github.run_number }}
@@ -163,3 +208,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           compression-level: 1
+
+      - name: Telegram - final result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+          SYNC_OUTCOME: ${{ steps.sync.outcome }}
+          DEVICE_OUTCOME: ${{ steps.device.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            DURATION="$((ELAPSED / 60))m $((ELAPSED % 60))s"
+          else
+            DURATION="unavailable"
+          fi
+          if [[ "$JOB_RESULT" == "success" ]]; then
+            MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: SUCCESS\nDuration: %s\nArtifact: <code>twrp-m55xq-%s</code>\n<a href="%s/%s/actions/runs/%s">Download recovery.img / Odin TAR</a>' \
+              "$GITHUB_RUN_NUMBER" "$DURATION" "$GITHUB_RUN_NUMBER" \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          else
+            STAGE="environment / checkout"
+            if [[ "$SYNC_OUTCOME" == "failure" ]]; then STAGE="source sync"
+            elif [[ "$DEVICE_OUTCOME" == "failure" ]]; then STAGE="device tree"
+            elif [[ "$COMPILE_OUTCOME" == "failure" ]]; then STAGE="recovery compilation"
+            elif [[ "$PACKAGE_OUTCOME" == "failure" ]]; then STAGE="image packaging"
+            elif [[ "$UPLOAD_OUTCOME" == "failure" ]]; then STAGE="artifact upload"
+            fi
+            MESSAGE=$(printf '<b>TWRP Galaxy M55</b>\nRun #%s: %s\nStage: %s\nDuration: %s\n<a href="%s/%s/actions/runs/%s">Open logs</a>' \
+              "$GITHUB_RUN_NUMBER" "$JOB_RESULT" "$STAGE" "$DURATION" \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          fi
+          bash "$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh" "$MESSAGE"
