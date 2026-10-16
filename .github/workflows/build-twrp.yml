@@ -101,9 +101,9 @@ jobs:
             "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq"
           rm -rf "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/.git" \
                  "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/.github"
-          git clone --depth=1 --single-branch -b android-12.1 \
-            https://github.com/TeamWin/android_device_qcom_twrp-common.git \
-            "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common"
+          # twrp-default.xml already syncs TeamWin's qcom/twrp-common.
+          # Cloning it again fails because this directory is nonempty.
+          echo "Using Qualcomm TWRP common from repo sync"
           test -f "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
           test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
 
