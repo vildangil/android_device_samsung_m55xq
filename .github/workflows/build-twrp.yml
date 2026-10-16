@@ -1,0 +1,165 @@
+name: Build TWRP (Galaxy M55)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tree_ref:
+        description: Device tree branch to build
+        required: true
+        type: choice
+        default: fix/twrp-fbe-preflight
+        options:
+          - fix/twrp-fbe-preflight
+          - android-12.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m55xq-twrp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recovery:
+    name: TWRP 12.1 / m55xq
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      USE_CCACHE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPRESS: "1"
+      ALLOW_MISSING_DEPENDENCIES: "true"
+      JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+
+    steps:
+      - name: Check out selected device tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tree_ref }}
+          path: device_tree
+          persist-credentials: false
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell /opt/hostedtoolcache \
+            /usr/local/lib/node_modules
+          sudo docker image prune -af || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git git-lfs gnupg gperf lib32z1-dev libelf-dev liblz4-tool \
+            libncurses-dev libssl-dev libxml2-utils lzop pngcrush rsync \
+            squashfs-tools xsltproc zip unzip zlib1g-dev python3 \
+            python-is-python3 openjdk-11-jdk-headless
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Restore compilation cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: m55xq-twrp12-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            m55xq-twrp12-${{ runner.os }}-
+
+      - name: Initialize and sync minimal TWRP 12.1 sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/twrp"
+          cd "$GITHUB_WORKSPACE/twrp"
+          repo init --depth=1 \
+            -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+            -b twrp-12.1
+          repo sync -c --force-sync --no-clone-bundle --no-tags \
+            --optimized-fetch --prune -j"$(nproc)"
+          df -h /
+
+      - name: Install M55 and Qualcomm recovery trees
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/twrp/device/samsung" \
+                   "$GITHUB_WORKSPACE/twrp/device/qcom"
+          cp -a "$GITHUB_WORKSPACE/device_tree" \
+            "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq"
+          rm -rf "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/.git" \
+                 "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/.github"
+          git clone --depth=1 --single-branch -b android-12.1 \
+            https://github.com/TeamWin/android_device_qcom_twrp-common.git \
+            "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common"
+          test -f "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
+          test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
+
+      - name: Build recovery.img
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/twrp"
+          mkdir -p "$CCACHE_DIR"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -z
+          export PATH="$JAVA_HOME/bin:$PATH"
+          export LC_ALL=C
+          source build/envsetup.sh
+          lunch twrp_m55xq-eng
+          mka recoveryimage -j"$(nproc)" 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          ccache -s
+          df -h /
+
+      - name: Verify image and create Odin archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IMAGE="$GITHUB_WORKSPACE/twrp/out/target/product/m55xq/recovery.img"
+          test -s "$IMAGE"
+          IMAGE_SIZE=$(stat -c '%s' "$IMAGE")
+          PARTITION_SIZE=112070656
+          if (( IMAGE_SIZE > PARTITION_SIZE )); then
+            echo "::error::recovery.img exceeds BOARD_RECOVERYIMAGE_PARTITION_SIZE"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf twrp-m55xq-odin.tar recovery.img
+          sha256sum recovery.img twrp-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Upload logs if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/twrp-build.log
+            twrp/out/verbose.log.gz
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
