@@ -189,3 +189,47 @@ Reference: AOSP hardware-wrapped keys documentation,
 `https://source.android.com/docs/security/features/encryption/hw-wrapped-keys`;
 AOSP KeyMint ErrorCode.aidl. This is **diagnosis**, not a code fix
 for CE/media or power_supply.
+
+
+## 2026-10-17: ADSP boot is confirmed to restore battery in TWRP
+
+On stock Android, remoteproc0 (ADSP), remoteproc1 (CDSP), remoteproc2
+(MSS) and remoteproc3 (WPSS) are all `running`; recovery leaves all
+four `offline`. Recovery's `/sys/class/power_supply` is empty.
+
+**Validated manually on the actual M55:** in recovery, issuing
+
+```sh
+echo start > /sys/class/remoteproc/remoteproc0/state
+```
+
+temporarily interrupted ADB but then `remoteproc0/state` became
+`running` and six supply entries appeared: `ac`, `battery`,
+`otg`, `ucsi-source-psy-...`, `usb`, `wireless`. The kernel log
+showed repeated `[GXY_PSY]gxy_bat_calc_time_to_full` with SOC ~74
+in that session. This confirms the ADSP/PMIC GLINK dependency.
+
+**Recovery-only patch:** `init.recovery.qcom.rc` has a single
+`on boot` `wait .../remoteproc0/state 2` and `write .../state start`
+*after* the original KeyMint startup command, and firmware partition is
+already mounted in `on fs`. No other remoteproc is started. Existing
+working metadata FBE and read-only EFS handling are unchanged.
+
+**Still to validate in a fresh build:** that the init builtin write
+succeeds, ADB reconnects, battery percentage appears in the TWRP UI,
+and metadata FBE remains mountable. If TWRP UI reports no battery
+despite sysfs registration, inspect legacy battery reader separately;
+the post-ADSP dmesg still showed `healthd: battery none chg=`.
+Do not restart all remoteprocs or alter wrapped-key flags.
+
+Commands after boot:
+```cmd
+adb shell cat /sys/class/remoteproc/remoteproc0/state
+adb shell ls -la /sys/class/power_supply
+adb shell cat /sys/class/power_supply/battery/capacity
+adb shell cat /sys/class/power_supply/battery/status
+adb shell ls -l /dev/dma_heap/qcom,qseecom
+adb shell ls -ld /data /data/media /data/media/0
+adb pull /tmp/recovery.log twrp-recovery-adsp.log
+adb shell dmesg > twrp-dmesg-adsp.txt
+```
