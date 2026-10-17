@@ -130,9 +130,10 @@ BOARD_AVB_RECOVERY_ALGORITHM := SHA256_RSA4096
 BOARD_AVB_RECOVERY_ROLLBACK_INDEX := 1
 BOARD_AVB_RECOVERY_ROLLBACK_INDEX_LOCATION := 1
 
-# Hack: prevent anti rollback
-PLATFORM_SECURITY_PATCH := 2099-12-31
-VENDOR_SECURITY_PATCH := 2099-12-31
+# Match the installed Android 16 system/vendor SPL during KeyMint startup.
+# The artificial 2099 patch levels break KeyMint keyblob version validation.
+PLATFORM_SECURITY_PATCH := 2025-12-01
+VENDOR_SECURITY_PATCH := 2025-12-01
 PLATFORM_VERSION := 16.1.0
 
 # Encryption
