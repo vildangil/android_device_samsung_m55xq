@@ -321,3 +321,53 @@ current PID, and copy the actual binary + libraries + RC as needed.
 Only after the matching service works in recovery should the exact
 stock HIDL VINTF fragment be restored there. Preserve current working
 metadata FBE/KeyMint/ADSP fixes.
+
+## Exact stock Hermes/Weaver binary dependencies (pending libraries)
+
+User supplied stock Android 16 Galaxy M55:
+- `/vendor/bin/hermesd`, ELF64 aarch64 PIE, Android API 32,
+  `/system/bin/linker64`.
+- `/vendor/etc/init/hermesd.rc` launches
+  `service hermesd /vendor/bin/hermesd /data/vendor/gatekeeper`,
+  class hal, user system, group system 5678, socket
+  `hermes_secnvm`, WAKE_ALARM. Stock RC sets permissions for
+  `/dev/k250a` and `/dev/ssp`, and creates the gatekeeper directory
+  in `on post-fs-data`.
+- `/vendor/etc/vintf/manifest/iweaver_v1_manifest.xml`
+  declares HIDL `android.hardware.weaver@1.0::IWeaver/default`.
+
+Direct DT_NEEDED vendor libraries NOT present as prebuilts in this
+recovery device-tree:
+```
+libhwvault.so
+libshctrl.so
+libese-grdg.so
+vendor.samsung.hardware.security.hermes-V1-ndk_platform.so
+vendor.samsung.hardware.security.drk-V1-ndk_platform.so
+android.hardware.weaver@1.0.so
+libhermes_bdbridge.so
+vendor.samsung.hardware.security.drk@2.0.so
+```
+`libQSEEComAPI.so` is already present. Other common VNDK,
+system, libc/hidl/binder libraries may be supplied by the TWRP build
+but must be verified for compatible ABI/sonames, including transitive
+dependencies, after obtaining the vendor libraries.
+
+**Do not commit an incomplete runtime change** just to register a
+nonexistent HAL; and do not publish Samsung proprietary vendor blobs to
+a public repo without verifying redistribution rights. Instead, gather
+matching vendor libraries read-only from the user's installed firmware
+and build a private overlay or an explicit opt-in artifact path.
+
+In recovery, user-data is metadata-mounted by TWRP *after* Android
+`on post-fs-data` init triggers, so stock `hermesd.rc` cannot simply
+be copied and assumed to start correctly. A recovery variant should
+delay Hermes startup until `crypto.ready=1` (set after
+`prepdecrypt`), use an explicit recovery SELinux seclabel if
+necessary, then verify registration with `lshal` and that Weaver
+retrieval works before trying credential unlock. Preserve existing
+gatekeeper directory, slots and stored synthetic passwords; **no
+format /data, no reset/delete/recreate keys**.
+
+This entry records investigation only: FBE metadata, ADSP and battery
+fixes remain intact.
