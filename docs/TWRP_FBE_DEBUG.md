@@ -42,3 +42,42 @@ If it mounts but `/data` is still inaccessible, investigate the dm-default-key
 setup and Samsung KeyMint/Gatekeeper services, including whether the prebuilts
 can load all their library dependencies. Compare the stock ROM's effective fstab
 and encryption properties before changing any encryption flag.
+
+
+## Galaxy M55 Android 16 KeyMint preflight (2026-10-17)
+
+Build #4 booted successfully, but its ramdisk had `ro.build.version.release=12`
+(and `ro.build.version.security_patch=2099-12-31`) while the installed
+Android metadata key came from Android 16. Logcat reported
+`key_os_version(160000) > vl->os_version(120000)` and `upgradeKey: ret -38`.
+The prepdecrypt script changed the live value to 16 only **after** the first
+metadata decryption attempt failed. Samsung KeyMint also tried to access
+`/mnt/vendor/efs/DAK` before the EFS partition had been mounted there.
+
+**Patch on this branch:** `init.recovery.qcom.rc` uses the existing
+`/system/bin/resetprop` executable during init to set the Android version 16
+and the stock system/vendor security patch of 2025-12-01, prior to the KeyMint
+service startup. The same rc file mounts Samsung EFS at `/mnt/vendor/efs`
+in read-only mode during `on fs` so KeyMint can read keys/provisioning.
+No partition formatting, key deletion, or chmod on GAK keys is performed.
+
+**Test after a NEW build:** Boot recovery and, before rebooting, run:
+
+```bat
+adb shell getprop ro.build.version.release
+adb shell getprop ro.build.version.security_patch
+adb shell getprop ro.vendor.build.security_patch
+adb shell cat /proc/mounts
+adb shell ls -ld /mnt/vendor/efs /mnt/vendor/efs/DAK
+adb pull /tmp/recovery.log twrp-recovery-new.log
+adb logcat -b all -d > twrp-logcat-new.txt
+adb shell dmesg > twrp-dmesg-new.txt
+```
+
+Expected: Android release `16` and SPL `2025-12-01` visible immediately.
+Confirm `/mnt/vendor/efs` is mounted before KeyMint initialization.
+Actual `/data` mount and CE user data access must be verified separately.
+The logs also contain Samsung KeyMint fuse warnings and Qualcomm QSEECom
+listener failures; they may require additional work even after OS version
+is corrected. Do not format `/data` or `/metadata` to debug FBE.
+Do not share the contents of EFS or `/metadata/vold` (cryptographic secrets).
