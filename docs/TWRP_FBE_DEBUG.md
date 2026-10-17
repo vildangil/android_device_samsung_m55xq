@@ -233,3 +233,51 @@ adb shell ls -ld /data /data/media /data/media/0
 adb pull /tmp/recovery.log twrp-recovery-adsp.log
 adb shell dmesg > twrp-dmesg-adsp.txt
 ```
+
+
+## 2026-10-17: Android 16 CE decrypt now blocked by missing Weaver 1.0
+
+Latest Galaxy M55 recovery (TWRP 3.7.1_12-VildanG, October 17):
+
+- **Battery works** with automatic ADSP start. The prior QSEECom DMA-heap
+  permission fix is included.
+- Metadata encryption is unlocked and `/dev/block/dm-6` mounts `/data`.
+- Initial systemwide FBE setup now succeeds: KeyMint logs
+  `swd_generate_key() returns 0`, `generateKeyInternal: ret 0`,
+  `convertStorageKeyToEphemeralInternal: ret 0`; TWRP installs the
+  DE and per-boot fscrypt provisioning keys and writes
+  `/data/unencrypted/per_boot_ref`. The previous KeyMint `-49` failure
+  is **no longer present at this stage**.
+- The UI requests a PIN for user 0; TWRP detects an existing synthetic
+  password with Weaver. On PIN submission, decryption aborts at:
+  `Get_Weaver_Data` -> `Failed to get weaver service` ->
+  `Failed to decrypt user 0`. **It does not prove the PIN is incorrect**.
+- `hwservicemanager` precisely reports:
+  `Cannot find entry android.hardware.weaver@1.0::IWeaver/default in
+  either framework or device VINTF manifest`.
+- Current device-tree ramdisk contains no Weaver binary, no Weaver
+  init service and no Weaver VINTF manifest declaration (verified against
+  Git tree). Device TWRP 12.1 path calls the legacy HIDL 1.0 interface;
+  Android 13+ may instead ship an AIDL Weaver HAL.
+- **Do not guess a service executable or declare an interface without a
+  matching working hardware implementation**. A fake/software Weaver
+  cannot access the existing hardware-bound synthetic-password slots.
+
+Next task: inspect **stock Android** HAL implementation and registration,
+without exporting any secrets:
+
+```bat
+adb shell "service list | grep -i weaver" > stock-weaver.txt 2>&1
+adb shell "lshal 2>/dev/null | grep -i weaver" >> stock-weaver.txt 2>&1
+adb shell "ls -l /vendor/bin/hw/*weaver* /odm/bin/hw/*weaver* /system/bin/*weaver* 2>&1" >> stock-weaver.txt 2>&1
+adb shell "grep -RinE 'weaver|IWeaver' /vendor/etc/vintf /odm/etc/vintf /system/etc/vintf /system_ext/etc/vintf 2>/dev/null" >> stock-weaver.txt 2>&1
+adb shell "grep -RinE 'weaver|IWeaver' /vendor/etc/init /odm/etc/init /system/etc/init /system_ext/etc/init 2>/dev/null" >> stock-weaver.txt 2>&1
+```
+
+If stock provides a HIDL 1.0 implementation, include the **matching
+vendor service binary and all dependencies**, its init RC and VINTF
+declaration in recovery; test its registration before attempting CE
+unlock. If stock provides only AIDL, this TWRP 12.1 HIDL client needs
+an appropriate compatible client/bridge implementation, not just a
+manifest entry. Keep KeyMint/ADSP/metadata fixes untouched. Do not
+delete locksettings, CE keys, Weaver slots or format data.
