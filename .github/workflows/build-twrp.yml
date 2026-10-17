@@ -189,6 +189,32 @@ jobs:
           echo "Using Qualcomm TWRP common from repo sync"
           test -f "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
           test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
+          # Fail quickly rather than compiling a recovery that advertises
+          # Weaver but cannot launch Samsung's actual Hermes service.
+          if [[ "${{ inputs.tree_ref }}" == "fix/twrp-weaver-hermes" ]]; then
+            for blob in \
+              vendor/bin/hermesd \
+              vendor/lib64/android.hardware.weaver@1.0.so \
+              vendor/lib64/libhwvault.so \
+              vendor/lib64/libshctrl.so \
+              vendor/lib64/libese-grdg.so \
+              vendor/lib64/libhermes_bdbridge.so \
+              vendor/lib64/vendor.samsung.hardware.security.drk-V1-ndk_platform.so \
+              vendor/lib64/vendor.samsung.hardware.security.drk@2.0.so \
+              vendor/lib64/vendor.samsung.hardware.security.hermes-V1-ndk_platform.so \
+              vendor/etc/secnvm/k250a_47000301_0.img \
+              vendor/etc/secnvm/k250a_47000305_c.img \
+              vendor/etc/secnvm/k250a_47000306_1.img; do
+              if [[ ! -s "$GITHUB_WORKSPACE/device_tree/recovery/root/$blob" ]]; then
+                echo "::error::Missing stock Hermes blob: recovery/root/$blob. Apply the provided user-side ZIP installer before building this branch."
+                exit 1
+              fi
+            done
+            test -x "$GITHUB_WORKSPACE/device_tree/recovery/root/vendor/bin/hermesd" || {
+              echo "::error::Hermes executable has no +x Git file mode"
+              exit 1
+            }
+          fi
           # Reject accidental TeamWin fallback at every build stage.
           grep -Eq '^TW_DEVICE_VERSION[[:space:]]*:=[[:space:]]*VildanG[[:space:]]*$' \
             "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
