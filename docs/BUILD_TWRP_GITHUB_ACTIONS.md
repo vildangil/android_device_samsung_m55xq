@@ -64,7 +64,35 @@ Successful Telegram Odin TAR upload uses a caption modeled on the kernel
 builder's `.info` file: compilation duration, `md5: <code>...</code>`,
 and recovery version/device. `SHA256SUMS` is also uploaded. If the
 recovery build or source sync fails, a compressed log is sent instead.
-Large archives are split into pieces supported by the hosted Telegram Bot API.
+**Large archives are not split anymore.** The previous Odin TAR from build #4 is
+112,070,656 bytes (around 107 MiB), larger than the hosted Telegram Bot API's
+50 MB `sendDocument` limit. To send the **original .tar as one Telegram file**,
+the workflow now supports Telegram MTProto via Telethon.
+
+Add two additional repository Actions secrets (get the values from
+https://my.telegram.org, under API development tools):
+
+- `TG_API_ID`: your Telegram application API ID.
+- `TG_API_HASH`: its matching API hash.
+
+The build uses the existing `BOT_TOKEN` to log in **as the bot**, not as your
+personal Telegram account. MTProto credentials are loaded only in the Telegram
+upload step; bot authorization uses an in-memory session. The workflow
+does not persist a Telegram session file or print the credentials.
+
+When the API credentials are configured, the Telegram helper attempts to
+send the whole `twrp-m55xq-odin.tar` as **one document** (no parts).
+`SHA256SUMS` remains a separate tiny document.
+
+Without those extra secrets, or if MTProto access to the destination chat
+fails, no large upload is attempted through the hosted Bot API. Instead, the
+chat receives a link to the GitHub Actions artifact containing the complete
+unmodified TAR and `recovery.img`. A bot in a private channel/supergroup
+may require a resolvable public `@username` or appropriate chat access
+for MTProto; the fallback link is preserved if the upload cannot be made.
+
+Existing workflow runs are unaffected. New Telegram behavior takes effect
+on the next run from `android-12.1`.
 
 ### Configuration
 
