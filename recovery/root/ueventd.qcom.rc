@@ -1,0 +1,17 @@
+# Galaxy M55 (m55xq): Qualcomm ueventd rules for recovery.
+#
+# Android 12.1 ueventd imports /ueventd.qcom.rc, not legacy /ueventd.rc.
+# The stock system assigns 0444 system:system to qcom DMA heaps.
+# Without these rules they are created 0600 root:root; QSEECom userspace
+# reports DMA heap allocation EACCES (errno 13), breaking FBE key setup.
+#
+# Keep exactly the stock modes; do not make secure DMA heaps writable.
+subsystem dma_heap
+    devname uevent_devpath
+    dirname /dev/dma_heap
+
+/dev/dma_heap/qcom,*      0444 system system
+/dev/mem_buf_vm/*         0444 system system
+/dev/qseecom              0660 system drmrpc
+/dev/qce                  0660 system drmrpc
+/dev/smcinvoke            0660 system drmrpc
