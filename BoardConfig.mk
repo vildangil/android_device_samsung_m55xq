@@ -230,10 +230,10 @@ OF_FIX_DECRYPTION_ON_DATA_MEDIA := 1
 OF_UNBIND_SDCARD_F2FS := 1
 
 # Version/Maintainer
-TW_DEVICE_VERSION := SavedByLight Stable V2.0
-SHRP_MAINTAINER := SavedByLight
-OF_MAINTAINER := SavedByLight
-MAINTAINER := SavedByLight
+TW_DEVICE_VERSION := VildanG
+SHRP_MAINTAINER := VildanG
+OF_MAINTAINER := VildanG
+MAINTAINER := VildanG
 
 # For testing only
 BETA_BUILD := true
