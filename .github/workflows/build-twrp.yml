@@ -10,6 +10,7 @@ on:
         default: fix/twrp-fbe-preflight
         options:
           - fix/twrp-fbe-preflight
+          - fix/twrp-weaver-hermes
           - android-12.1
       NOTES:
         description: Optional note to include in Telegram updates
