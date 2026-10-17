@@ -1,0 +1,16 @@
+# Galaxy M55: Samsung Hermes is the stock HIDL Weaver 1.0 implementation.
+# Unlike normal Android, TWRP mounts metadata-encrypted /data in userspace.
+# Start Hermes only once prepdecrypt has completed and hwservicemanager exists.
+on property:crypto.ready=1 && property:hwservicemanager.ready=true
+    mkdir /data/vendor/gatekeeper 0770 system system
+    start hermesd
+
+service hermesd /vendor/bin/hermesd /data/vendor/gatekeeper
+    class hal
+    disabled
+    user system
+    group system 5678
+    socket hermes_secnvm stream 660 system system
+    capabilities WAKE_ALARM
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
+    seclabel u:r:recovery:s0
