@@ -33,6 +33,14 @@ on init
     setprop prepdecrypt.setpatch true
     setprop prepdecrypt.loglevel 2
     setprop logd.ready true
+    # Stock metadata key was created on Android 16 / 2025-12-01.
+    # The TWRP 12.1 ramdisk otherwise advertises Android 12 and 2099 SPL.
+    # KeyMint starts during 'on boot', before prepdecrypt fixes these values.
+    # Align the live props here, before KeyMint can deserialize the key.
+    # resetprop is provided by TW_INCLUDE_LIBRESETPROP.
+    exec -- /system/bin/resetprop ro.build.version.release 16
+    exec -- /system/bin/resetprop ro.build.version.security_patch 2025-12-01
+    exec -- /system/bin/resetprop ro.vendor.build.security_patch 2025-12-01
     start health-hal-2-1
 
 on boot 
@@ -50,14 +58,13 @@ on fs
     symlink /dev/block/platform/soc/${ro.boot.bootdevice} /dev/block/bootdevice
     mkdir /vendor/firmware_mnt
     mount vfat /dev/block/bootdevice/by-name/apnhlos /vendor/firmware_mnt
-    
-    export ANDROID_ROOT /system_root
+    # Samsung KeyMint reads /mnt/vendor/efs/DAK and prov_data at startup.
+    # EFS was not mounted at this location; an empty directory is not enough.
+    # Read-only: never modify EFS keys or provisioning during recovery startup.
+    mkdir /mnt/vendor/efs 0771 root root
+    mount ext4 /dev/block/bootdevice/by-name/efs /mnt/vendor/efs ro
 
-on post-fs
-    mkdir /mnt/vendor/efs/DAK 0775 root root
-    restorecon --recursive /mnt/vendor/efs/DAK
-    chown root root /mnt/vendor/efs/DAK/gakkeybox
-    chmod 0644 /mnt/vendor/efs/DAK/gakkeybox
+    export ANDROID_ROOT /system_root
     
 on post-fs-data
     mkdir /data/vendor/keymaster 0775 root root
