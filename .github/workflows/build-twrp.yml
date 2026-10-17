@@ -231,7 +231,20 @@ jobs:
             source build/envsetup.sh
             set -e
             type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
-            lunch twrp_m55xq-eng 2>&1 | tee "$RUNNER_TEMP/twrp-lunch.log"
+            # lunch MUST run in this shell: a pipe to tee would run it in a
+            # subshell and discard TARGET_PRODUCT/TARGET_BUILD_VARIANT exports.
+            # Store its output first, then print it so the environment survives.
+            if lunch twrp_m55xq-eng > "$RUNNER_TEMP/twrp-lunch.log" 2>&1; then
+              cat "$RUNNER_TEMP/twrp-lunch.log"
+            else
+              cat "$RUNNER_TEMP/twrp-lunch.log"
+              echo "::error::lunch failed"
+              exit 1
+            fi
+            if [[ "${TARGET_PRODUCT:-}" != "twrp_m55xq" || "${TARGET_BUILD_VARIANT:-}" != "eng" ]]; then
+              echo "::error::lunch did not preserve TWRP device selection"
+              exit 1
+            fi
             # Some TWRP lunch scripts silently fetch TeamWin's device tree
             # when dumpvars fails; detect it even when lunch exits with 0.
             if grep -Eq 'dumpvars failed|Device m55xq not found|Attempting to retrieve device repository' \
