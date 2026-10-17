@@ -15,3 +15,7 @@ subsystem dma_heap
 /dev/qseecom              0660 system drmrpc
 /dev/qce                  0660 system drmrpc
 /dev/smcinvoke            0660 system drmrpc
+
+# Samsung Hermes secure element devices, matching stock hermesd.rc.
+/dev/k250a              0660 system system
+/dev/ssp                0660 system system
