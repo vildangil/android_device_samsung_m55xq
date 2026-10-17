@@ -188,6 +188,763 @@ jobs:
           echo "Using Qualcomm TWRP common from repo sync"
           test -f "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
           test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
+          # A failed lunch used to auto-download TeamWin's SavedByLight tree.
+          # Validate the selected tree before allowing compilation to begin.
+          grep -Eq '^TW_DEVICE_VERSION[[:space:]]*:=[[:space:]]*VildanG[[:space:]]*
+
+      - name: Telegram - device info and compilation
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          bash "$TG" msg "gh $RUN_NUM: recovery name: TWRP%nlgh $RUN_NUM: recovery ver: 12.1%nlgh $RUN_NUM: recovery head commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: device: m55xq"
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          bash "$TG" msg "gh $RUN_NUM: running compilation script(s): recoveryimage"
+
+      - name: Build recovery.img
+        id: compile
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/twrp"
+          mkdir -p "$CCACHE_DIR"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -z
+          export PATH="$JAVA_HOME/bin:$PATH"
+          export LC_ALL=C
+          # Capture setup and compilation failures in one log.
+          {
+            # Some device vendorsetup.sh files return 1 even when successfully sourced.
+            set +e
+            source build/envsetup.sh
+            set -e
+            type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
+            lunch twrp_m55xq-eng 2>&1 | tee "$RUNNER_TEMP/twrp-lunch.log"
+            # lunch may return success even after it replaces a local tree with
+            # TeamWin fallback. Never publish an image from a different tree.
+            if grep -Eq 'dumpvars failed|Device m55xq not found|Attempting to retrieve device repository' \
+              "$RUNNER_TEMP/twrp-lunch.log"; then
+              echo "::error::lunch used TeamWin fallback or failed dumpvars; refusing to build"
+              exit 1
+            fi
+            for relpath in BoardConfig.mk device.mk recovery/root/init.recovery.qcom.rc; do
+              if ! cmp -s "$GITHUB_WORKSPACE/device_tree/$relpath" \
+                "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/$relpath"; then
+                echo "::error::Device tree was replaced during lunch: $relpath"
+                exit 1
+              fi
+            done
+            grep -Eq '^TW_DEVICE_VERSION[[:space:]]*:=[[:space:]]*VildanG[[:space:]]*
+          } 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          ccache -s
+          df -h /
+
+      - name: Verify image and create Odin archive
+        id: package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IMAGE="$GITHUB_WORKSPACE/twrp/out/target/product/m55xq/recovery.img"
+          test -s "$IMAGE"
+          IMAGE_SIZE=$(stat -c '%s' "$IMAGE")
+          PARTITION_SIZE=112070656
+          if (( IMAGE_SIZE > PARTITION_SIZE )); then
+            echo "::error::recovery.img exceeds BOARD_RECOVERYIMAGE_PARTITION_SIZE"
+            exit 1
+          fi
+          # Verify the selected files were not silently replaced mid-build.
+          for relpath in BoardConfig.mk device.mk recovery/root/init.recovery.qcom.rc; do
+            cmp -s "$GITHUB_WORKSPACE/device_tree/$relpath" \
+              "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/$relpath" || {
+                echo "::error::Unexpected device tree change while compiling: $relpath"
+                exit 1
+              }
+          done
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          {
+            printf 'Recovery: TWRP m55xq / VildanG\n'
+            printf 'Tree ref: %s\n' "${{ inputs.tree_ref }}"
+            printf 'Tree commit: %s\n' "$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse HEAD)"
+            printf 'GitHub Actions run: %s\n' "$GITHUB_RUN_ID"
+          } > "$GITHUB_WORKSPACE/artifacts/BUILD_INFO.txt"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf twrp-m55xq-odin.tar recovery.img
+          sha256sum recovery.img twrp-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload recovery
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Upload logs if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/twrp-build.log
+            ${{ runner.temp }}/twrp-lunch.log
+            ${{ runner.temp }}/twrp-sync.log
+            twrp/out/verbose.log.gz
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
+
+      - name: Telegram - upload recovery and checksums
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+          MD5=$(md5sum "$ARTIFACT_DIR/twrp-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION=$(printf 'build succeeded in %dm, %ds%%nlmd5: <code>%s</code>%%nlrecovery: TWRP 12.1 / m55xq' \
+            "$((COMPILE_TIME / 60))" "$((COMPILE_TIME % 60))" "$MD5")
+          bash "$TG" up "$ARTIFACT_DIR/twrp-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: SHA256SUMS"
+
+      - name: Telegram - send failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            CAPTION="build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            CAPTION="build failed"
+          fi
+          if [[ -s "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" "$CAPTION%nlrecovery: TWRP 12.1 / m55xq"
+          elif [[ -s "$RUNNER_TEMP/twrp-sync.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-sync.log" > "$RUNNER_TEMP/twrp-sync.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-sync.log.gz" "$CAPTION%nlstage: source sync"
+          fi
+
+      - name: Telegram - final result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            DURATION="unknown time"
+          fi
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ "$JOB_RESULT" == "success" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow ended in $DURATION"
+          elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow cancelled in $DURATION"
+          else
+            bash "$TG" msg "gh $RUN_NUM: workflow failed in $DURATION"
+          fi
+
+ \
+            "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
+          grep -Eq '^PRODUCT_SHIPPING_API_LEVEL[[:space:]]*:=[[:space:]]*30[[:space:]]*
+
+      - name: Telegram - device info and compilation
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          bash "$TG" msg "gh $RUN_NUM: recovery name: TWRP%nlgh $RUN_NUM: recovery ver: 12.1%nlgh $RUN_NUM: recovery head commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: device: m55xq"
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          bash "$TG" msg "gh $RUN_NUM: running compilation script(s): recoveryimage"
+
+      - name: Build recovery.img
+        id: compile
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/twrp"
+          mkdir -p "$CCACHE_DIR"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -z
+          export PATH="$JAVA_HOME/bin:$PATH"
+          export LC_ALL=C
+          # Capture setup and compilation failures in one log.
+          {
+            # Some device vendorsetup.sh files return 1 even when successfully sourced.
+            set +e
+            source build/envsetup.sh
+            set -e
+            type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
+            lunch twrp_m55xq-eng
+            mka recoveryimage -j"$(nproc)"
+          } 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          ccache -s
+          df -h /
+
+      - name: Verify image and create Odin archive
+        id: package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IMAGE="$GITHUB_WORKSPACE/twrp/out/target/product/m55xq/recovery.img"
+          test -s "$IMAGE"
+          IMAGE_SIZE=$(stat -c '%s' "$IMAGE")
+          PARTITION_SIZE=112070656
+          if (( IMAGE_SIZE > PARTITION_SIZE )); then
+            echo "::error::recovery.img exceeds BOARD_RECOVERYIMAGE_PARTITION_SIZE"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf twrp-m55xq-odin.tar recovery.img
+          sha256sum recovery.img twrp-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload recovery
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Upload logs if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/twrp-build.log
+            ${{ runner.temp }}/twrp-sync.log
+            twrp/out/verbose.log.gz
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
+
+      - name: Telegram - upload recovery and checksums
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+          MD5=$(md5sum "$ARTIFACT_DIR/twrp-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION=$(printf 'build succeeded in %dm, %ds%%nlmd5: <code>%s</code>%%nlrecovery: TWRP 12.1 / m55xq' \
+            "$((COMPILE_TIME / 60))" "$((COMPILE_TIME % 60))" "$MD5")
+          bash "$TG" up "$ARTIFACT_DIR/twrp-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: SHA256SUMS"
+
+      - name: Telegram - send failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            CAPTION="build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            CAPTION="build failed"
+          fi
+          if [[ -s "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" "$CAPTION%nlrecovery: TWRP 12.1 / m55xq"
+          elif [[ -s "$RUNNER_TEMP/twrp-sync.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-sync.log" > "$RUNNER_TEMP/twrp-sync.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-sync.log.gz" "$CAPTION%nlstage: source sync"
+          fi
+
+      - name: Telegram - final result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            DURATION="unknown time"
+          fi
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ "$JOB_RESULT" == "success" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow ended in $DURATION"
+          elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow cancelled in $DURATION"
+          else
+            bash "$TG" msg "gh $RUN_NUM: workflow failed in $DURATION"
+          fi
+
+ \
+            "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/device.mk"
+          for relpath in BoardConfig.mk device.mk recovery/root/init.recovery.qcom.rc; do
+            cmp -s "$GITHUB_WORKSPACE/device_tree/$relpath" \
+              "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/$relpath" || {
+                echo "::error::Selected device tree mismatch before lunch: $relpath"
+                exit 1
+              }
+          done
+
+      - name: Telegram - device info and compilation
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          bash "$TG" msg "gh $RUN_NUM: recovery name: TWRP%nlgh $RUN_NUM: recovery ver: 12.1%nlgh $RUN_NUM: recovery head commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: device: m55xq"
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          bash "$TG" msg "gh $RUN_NUM: running compilation script(s): recoveryimage"
+
+      - name: Build recovery.img
+        id: compile
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/twrp"
+          mkdir -p "$CCACHE_DIR"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -z
+          export PATH="$JAVA_HOME/bin:$PATH"
+          export LC_ALL=C
+          # Capture setup and compilation failures in one log.
+          {
+            # Some device vendorsetup.sh files return 1 even when successfully sourced.
+            set +e
+            source build/envsetup.sh
+            set -e
+            type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
+            lunch twrp_m55xq-eng
+            mka recoveryimage -j"$(nproc)"
+          } 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          ccache -s
+          df -h /
+
+      - name: Verify image and create Odin archive
+        id: package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IMAGE="$GITHUB_WORKSPACE/twrp/out/target/product/m55xq/recovery.img"
+          test -s "$IMAGE"
+          IMAGE_SIZE=$(stat -c '%s' "$IMAGE")
+          PARTITION_SIZE=112070656
+          if (( IMAGE_SIZE > PARTITION_SIZE )); then
+            echo "::error::recovery.img exceeds BOARD_RECOVERYIMAGE_PARTITION_SIZE"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf twrp-m55xq-odin.tar recovery.img
+          sha256sum recovery.img twrp-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload recovery
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Upload logs if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/twrp-build.log
+            ${{ runner.temp }}/twrp-sync.log
+            twrp/out/verbose.log.gz
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
+
+      - name: Telegram - upload recovery and checksums
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+          MD5=$(md5sum "$ARTIFACT_DIR/twrp-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION=$(printf 'build succeeded in %dm, %ds%%nlmd5: <code>%s</code>%%nlrecovery: TWRP 12.1 / m55xq' \
+            "$((COMPILE_TIME / 60))" "$((COMPILE_TIME % 60))" "$MD5")
+          bash "$TG" up "$ARTIFACT_DIR/twrp-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: SHA256SUMS"
+
+      - name: Telegram - send failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            CAPTION="build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            CAPTION="build failed"
+          fi
+          if [[ -s "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" "$CAPTION%nlrecovery: TWRP 12.1 / m55xq"
+          elif [[ -s "$RUNNER_TEMP/twrp-sync.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-sync.log" > "$RUNNER_TEMP/twrp-sync.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-sync.log.gz" "$CAPTION%nlstage: source sync"
+          fi
+
+      - name: Telegram - final result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            DURATION="unknown time"
+          fi
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ "$JOB_RESULT" == "success" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow ended in $DURATION"
+          elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow cancelled in $DURATION"
+          else
+            bash "$TG" msg "gh $RUN_NUM: workflow failed in $DURATION"
+          fi
+
+ \
+              device/samsung/m55xq/BoardConfig.mk
+            echo "Validated VildanG device tree: $(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse HEAD)"
+            mka recoveryimage -j"$(nproc)"
+          } 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          ccache -s
+          df -h /
+
+      - name: Verify image and create Odin archive
+        id: package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IMAGE="$GITHUB_WORKSPACE/twrp/out/target/product/m55xq/recovery.img"
+          test -s "$IMAGE"
+          IMAGE_SIZE=$(stat -c '%s' "$IMAGE")
+          PARTITION_SIZE=112070656
+          if (( IMAGE_SIZE > PARTITION_SIZE )); then
+            echo "::error::recovery.img exceeds BOARD_RECOVERYIMAGE_PARTITION_SIZE"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf twrp-m55xq-odin.tar recovery.img
+          sha256sum recovery.img twrp-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload recovery
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Upload logs if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/twrp-build.log
+            ${{ runner.temp }}/twrp-sync.log
+            twrp/out/verbose.log.gz
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
+
+      - name: Telegram - upload recovery and checksums
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+          MD5=$(md5sum "$ARTIFACT_DIR/twrp-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION=$(printf 'build succeeded in %dm, %ds%%nlmd5: <code>%s</code>%%nlrecovery: TWRP 12.1 / m55xq' \
+            "$((COMPILE_TIME / 60))" "$((COMPILE_TIME % 60))" "$MD5")
+          bash "$TG" up "$ARTIFACT_DIR/twrp-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: SHA256SUMS"
+
+      - name: Telegram - send failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            CAPTION="build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            CAPTION="build failed"
+          fi
+          if [[ -s "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" "$CAPTION%nlrecovery: TWRP 12.1 / m55xq"
+          elif [[ -s "$RUNNER_TEMP/twrp-sync.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-sync.log" > "$RUNNER_TEMP/twrp-sync.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-sync.log.gz" "$CAPTION%nlstage: source sync"
+          fi
+
+      - name: Telegram - final result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            DURATION="unknown time"
+          fi
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ "$JOB_RESULT" == "success" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow ended in $DURATION"
+          elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow cancelled in $DURATION"
+          else
+            bash "$TG" msg "gh $RUN_NUM: workflow failed in $DURATION"
+          fi
+
+ \
+            "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/BoardConfig.mk"
+          grep -Eq '^PRODUCT_SHIPPING_API_LEVEL[[:space:]]*:=[[:space:]]*30[[:space:]]*
+
+      - name: Telegram - device info and compilation
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          bash "$TG" msg "gh $RUN_NUM: recovery name: TWRP%nlgh $RUN_NUM: recovery ver: 12.1%nlgh $RUN_NUM: recovery head commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: device: m55xq"
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          bash "$TG" msg "gh $RUN_NUM: running compilation script(s): recoveryimage"
+
+      - name: Build recovery.img
+        id: compile
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/twrp"
+          mkdir -p "$CCACHE_DIR"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -z
+          export PATH="$JAVA_HOME/bin:$PATH"
+          export LC_ALL=C
+          # Capture setup and compilation failures in one log.
+          {
+            # Some device vendorsetup.sh files return 1 even when successfully sourced.
+            set +e
+            source build/envsetup.sh
+            set -e
+            type lunch >/dev/null || { echo "::error::envsetup did not define lunch"; exit 1; }
+            lunch twrp_m55xq-eng
+            mka recoveryimage -j"$(nproc)"
+          } 2>&1 | tee "$RUNNER_TEMP/twrp-build.log"
+          ccache -s
+          df -h /
+
+      - name: Verify image and create Odin archive
+        id: package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          IMAGE="$GITHUB_WORKSPACE/twrp/out/target/product/m55xq/recovery.img"
+          test -s "$IMAGE"
+          IMAGE_SIZE=$(stat -c '%s' "$IMAGE")
+          PARTITION_SIZE=112070656
+          if (( IMAGE_SIZE > PARTITION_SIZE )); then
+            echo "::error::recovery.img exceeds BOARD_RECOVERYIMAGE_PARTITION_SIZE"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$IMAGE" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf twrp-m55xq-odin.tar recovery.img
+          sha256sum recovery.img twrp-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload recovery
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Upload logs if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/twrp-build.log
+            ${{ runner.temp }}/twrp-sync.log
+            twrp/out/verbose.log.gz
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
+
+      - name: Telegram - upload recovery and checksums
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+          MD5=$(md5sum "$ARTIFACT_DIR/twrp-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION=$(printf 'build succeeded in %dm, %ds%%nlmd5: <code>%s</code>%%nlrecovery: TWRP 12.1 / m55xq' \
+            "$((COMPILE_TIME / 60))" "$((COMPILE_TIME % 60))" "$MD5")
+          bash "$TG" up "$ARTIFACT_DIR/twrp-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: SHA256SUMS"
+
+      - name: Telegram - send failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            CAPTION="build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            CAPTION="build failed"
+          fi
+          if [[ -s "$RUNNER_TEMP/twrp-build.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-build.log" > "$RUNNER_TEMP/twrp-build.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-build.log.gz" "$CAPTION%nlrecovery: TWRP 12.1 / m55xq"
+          elif [[ -s "$RUNNER_TEMP/twrp-sync.log" ]]; then
+            gzip -c "$RUNNER_TEMP/twrp-sync.log" > "$RUNNER_TEMP/twrp-sync.log.gz"
+            bash "$TG" up "$RUNNER_TEMP/twrp-sync.log.gz" "$CAPTION%nlstage: source sync"
+          fi
+
+      - name: Telegram - final result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          NOW=$(date +%s)
+          if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            ELAPSED=$((NOW - TG_BUILD_STARTED))
+            DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+          else
+            DURATION="unknown time"
+          fi
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ "$JOB_RESULT" == "success" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow ended in $DURATION"
+          elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+            bash "$TG" msg "gh $RUN_NUM: workflow cancelled in $DURATION"
+          else
+            bash "$TG" msg "gh $RUN_NUM: workflow failed in $DURATION"
+          fi
+
+ \
+            "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/device.mk"
+          for relpath in BoardConfig.mk device.mk recovery/root/init.recovery.qcom.rc; do
+            cmp -s "$GITHUB_WORKSPACE/device_tree/$relpath" \
+              "$GITHUB_WORKSPACE/twrp/device/samsung/m55xq/$relpath" || {
+                echo "::error::Selected device tree mismatch before lunch: $relpath"
+                exit 1
+              }
+          done
 
       - name: Telegram - device info and compilation
         shell: bash
