@@ -281,3 +281,43 @@ unlock. If stock provides only AIDL, this TWRP 12.1 HIDL client needs
 an appropriate compatible client/bridge implementation, not just a
 manifest entry. Keep KeyMint/ADSP/metadata fixes untouched. Do not
 delete locksettings, CE keys, Weaver slots or format data.
+
+
+## Stock Galaxy M55 confirms legacy HIDL Weaver v1.0
+
+The stock Android 16 `stock-weaver.txt` confirms an active
+`android.hardware.weaver@1.0::IWeaver/default` instance in `lshal`
+at PID 1640 during that capture, with VINTF registration in
+`/vendor/etc/vintf/manifest/iweaver_v1_manifest.xml`.
+Thus Android 16 on this actual phone still uses **HIDL Weaver 1.0**:
+there is no AIDL-HIDL translation problem to solve at the client level.
+Do not read PID 1640 as stable across reboots.
+
+The command's glob for `/vendor/bin/hw/*weaver*` and counterparts
+reported no match, but this is **not evidence that Weaver has no
+executable**: the process may use a name without "weaver", reside in
+`/vendor/bin/` or `/system_ext/bin/`, or register Weaver alongside
+another HAL.
+
+The recovery tree currently lacks any Weaver VINTF fragment and
+its log records `Get_Weaver_Data` -> `Failed to get weaver service`.
+A VINTF fragment alone is insufficient unless the actual hardware
+service and its dependencies are present and running. Do not add
+a fake software Weaver or touch synthetic-password/Weaver slots.
+
+Next stock-side *non-sensitive* identification (run after Android boot,
+and save outputs, not PIN/locksettings content):
+
+```bat
+adb shell "lshal 2>/dev/null | grep 'android.hardware.weaver@1.0::IWeaver/default'" > stock-weaver-process.txt 2>&1
+adb shell "ps -A -o PID,USER,NAME,ARGS | grep -Ei 'weaver|gatekeeper|keymint|tee|tzdaemon|1640'" >> stock-weaver-process.txt 2>&1
+adb shell "cat /vendor/etc/vintf/manifest/iweaver_v1_manifest.xml" > stock-weaver-manifest.xml 2>&1
+adb shell "ls -l /vendor/bin/*weaver* /system_ext/bin/*weaver* /vendor/bin/hw/*gatekeeper* /vendor/bin/hw/*keymint* 2>&1" >> stock-weaver-process.txt 2>&1
+```
+
+Then locate `/proc/<current HIDL PID>/exe` and corresponding
+`/vendor/etc/init` or `/odm/etc/init` service definition with the
+current PID, and copy the actual binary + libraries + RC as needed.
+Only after the matching service works in recovery should the exact
+stock HIDL VINTF fragment be restored there. Preserve current working
+metadata FBE/KeyMint/ADSP fixes.
