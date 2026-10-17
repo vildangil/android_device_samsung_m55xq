@@ -160,7 +160,11 @@ TW_NO_BIND_SYSTEM := true
 TW_PREPARE_DATA_MEDIA_EARLY := true
 TW_USE_MODEL_HARDWARE_ID_FOR_DEVICE_ID := true
 TW_CUSTOM_CPU_TEMP_PATH := "/sys/class/thermal/thermal_zone50/temp"
-TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery/capacity"
+# TWRP's legacy battery monitor appends /capacity and /status itself.
+# Use sysfs directly: Samsung's recovery Health HAL reports NOT_SUPPORTED / 0%.
+# Do not use a fake battery level.
+TW_USE_LEGACY_BATTERY_SERVICES := true
+TW_CUSTOM_BATTERY_PATH := "/sys/class/power_supply/battery"
 
 # Samsung
 TW_NO_REBOOT_BOOTLOADER := true
