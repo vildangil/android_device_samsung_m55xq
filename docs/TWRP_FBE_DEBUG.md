@@ -81,3 +81,49 @@ The logs also contain Samsung KeyMint fuse warnings and Qualcomm QSEECom
 listener failures; they may require additional work even after OS version
 is corrected. Do not format `/data` or `/metadata` to debug FBE.
 Do not share the contents of EFS or `/metadata/vold` (cryptographic secrets).
+
+
+## 2026-10-17: Multi-Android compatibility and battery findings
+
+### Log evidence (TWRP 3.7.1_12-VildanG-5c3d206a)
+
+- The phone is Qualcomm **m55xq / taro**. Recovery `/sys/class/power_supply`
+  has **zero entries**. `pmic_glink.ko`, `gxy_glink_main.ko`,
+  `qti_battery_charger_main.ko` load, but no power_supply device registers.
+  `TW_USE_LEGACY_BATTERY_SERVICES := true` was already enabled: it cannot
+  display real capacity without a working kernel sysfs provider. Do not fake
+  the battery level or change the TWRP sysfs path while the class is empty.
+- EFS is mounted read-only at `/mnt/vendor/efs`; `/metadata` mounts ext4.
+  `/data` remains unmounted with wrapped-key FBE.
+- During KeyMint startup: `os_version=120000`,
+  `os_patchlevel=209912`, `key_os_version(160000) > vl->os_version(120000)`.
+  Kernel log shows the three old `exec -- /system/bin/resetprop` commands
+  failed due to absent SELinux domain transition. A newer device-tree commit
+  switches to `exec u:r:recovery:s0 root root -- ...` and stock SPL,
+  **but this recovery image does not contain those new changes**.
+- `prepdecrypt` already detects the *installed* Android 16 and 2025-12-01 SPL
+  from the real `/system` and `/vendor` partitions, and updates live props;
+  however it runs **after** the first FBE attempt and after KeyMint startup.
+
+### Safe future strategy for Android 15 + 16
+
+Android's KeyMint keys are version-bound. Do not hardcode Android 16 when
+booted on an Android 15 ROM, do not use an artificial 2099 patch level,
+and never downgrade/upgrade protected key blobs merely to test recovery.
+
+The multi-version implementation should reuse the QCOM TWRP common
+`prepdecrypt` behavior: obtain exact OS release + system/vendor SPL from the
+**installed ROM's** build properties, validate each field, then configure
+KeyMint **before** its first use and only then attempt metadata decryption.
+Check init trigger ordering, especially this tree's unconditional
+`on boot: start vendor.keymint-default`. Do not move that service or change
+recovery startup until testing confirms that early partition mapping and
+property setup can complete; changing the order blindly can regress FBE
+or boot. On missing/invalid ROM properties, fail closed with useful logs;
+never silently fall back to 16/2099. Existing encrypted Android 16 keys
+cannot be assumed to work after a downgrade to Android 15, even if recovery
+supports both installed ROM versions.
+
+References: AOSP 'Metadata encryption', AOSP 'Version binding', TeamWin
+'android_device_qcom_twrp-common' README. This section is diagnostic only:
+**no runtime multi-version change has been made**.
