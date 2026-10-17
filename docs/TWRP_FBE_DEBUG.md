@@ -127,3 +127,65 @@ supports both installed ROM versions.
 References: AOSP 'Metadata encryption', AOSP 'Version binding', TeamWin
 'android_device_qcom_twrp-common' README. This section is diagnostic only:
 **no runtime multi-version change has been made**.
+
+
+## 2026-10-17: metadata decryption now works, fscrypt per-boot key still fails
+
+After rebuilding with explicit `exec u:r:recovery:s0 root root -- resetprop`
+and Android 16 / 2025-12-01 SPL:
+
+- The three early init resetprop invocations now exit status 0 *before*
+  KeyMint service startup; KeyMint reports OS_VERSION 160000 and SPL 202512.
+- Metadata encryption **works**: TWRP prints
+  `Successfully decrypted metadata encrypted data partition`,
+  `/dev/block/dm-6` mounts at `/data` (F2FS).
+- File-based encryption remains **locked**: `fscrypt_initialize_systemwide_keys`
+  installs the existing system DE key from `/data/unencrypted/key`
+  (and writes its reference), then fails on the next, *per-boot*, wrapped
+  key generation step. TWRP retries 3 times. **Do not infer that
+  /data/media/0 or credential-encrypted (CE) files are unlocked merely
+  because /data is mounted.**
+- KeyMint `tz_generate_fbe_key` fails with `-49` on every generation
+  attempt, exposed by keystore2 as `generateKey ... -49`. AOSP
+  `ErrorCode.aidl` names `-49` **SECURE_HW_COMMUNICATION_FAILED**.
+  Existing key conversion `convertStorageKeyToEphemeral` succeeds.
+- `qseecomd` fails to register multiple trusted listeners (including
+  RPMB/GPFS) with `No ion heap of name qcom,qseecom exists` and
+  `DMA-Buf allocation failed ... errno = 13`. Separate Qualcomm
+  `qseecom-service` and `qteeconnector` repeatedly exit. These are
+  plausible causes of KeyMint hardware communication failure, but not
+  yet proven.
+- Samsung KeyMint logs missing `/mnt/vendor/efs/DAK/gakkeybox` and
+  empty `prov_data/dev_root`; EFS is mounted **read-only**, preserve
+  that and do not attempt to recreate provisioning keys or expose EFS
+  files as diagnostics.
+- The `/sys/class/power_supply` directory has **no entries** in
+  recovery even though battery-related kernel modules load. The
+  recovery Health HAL prints `No battery devices found`.
+  `TW_USE_LEGACY_BATTERY_SERVICES` alone cannot fix it.
+
+### Next non-destructive investigation
+
+In **recovery**, examine *existence and names only* (do not dump key
+material, encrypted blobs, EFS data or private user files):
+
+```sh
+adb shell 'ls -ld /dev/ion /dev/dma_heap /dev/dma_heap/* 2>&1'
+adb shell 'ls -la /sys/class/power_supply /sys/class/remoteproc 2>&1'
+adb shell 'ls -ld /data/media /data/media/0 /data/unencrypted 2>&1'
+adb shell 'ls -ld /mnt/vendor/efs/DAK /mnt/vendor/efs/prov_data 2>&1'
+```
+
+After rebooting into the **working normal Android system**, capture the
+equivalent `ls` output from `/dev/dma_heap`,
+`/sys/class/power_supply` and, where root access allows, relevant
+kernel lines for `pmic_glink`, `battery`, `qseecom`, `dma_heap`
+and `remoteproc`. Compare device-node names and registered drivers
+rather than editing/formatting partitions. If there is no trusted
+non-destructive fix for the Qualcomm listener, leave wrapped FBE
+unchanged; do not fake a per-boot key or remove `wrappedkey_v0`.
+
+Reference: AOSP hardware-wrapped keys documentation,
+`https://source.android.com/docs/security/features/encryption/hw-wrapped-keys`;
+AOSP KeyMint ErrorCode.aidl. This is **diagnosis**, not a code fix
+for CE/media or power_supply.
