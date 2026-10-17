@@ -46,6 +46,9 @@ jobs:
     timeout-minutes: 180
     env:
       USE_CCACHE: "1"
+      # Android's build system needs an explicit compiler-cache executable.
+      # USE_CCACHE alone resulted in zero ccache calls in successful runs.
+      CCACHE_EXEC: /usr/bin/ccache
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
       CCACHE_COMPRESS: "1"
