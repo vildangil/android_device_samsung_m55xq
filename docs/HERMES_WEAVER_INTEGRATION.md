@@ -21,9 +21,10 @@ In the **isolated** `fix/twrp-weaver-hermes` branch:
    advertises the exact stock HIDL Weaver 1.0 endpoint.
 2. `recovery/root/vendor/etc/init/hermesd.rc` declares the stock daemon
    (with `seclabel u:r:recovery:s0` for TWRP init) **disabled by default**.
-   It starts on `crypto.ready=1` together with
-   `hwservicemanager.ready=true`, after prepdecrypt mounted /data.
-   This avoids stock `post-fs-data`, which is too early in TWRP.
+   For the first hardware test it is started **manually**, only after
+   TWRP installs its DE keys. Stock `post-fs-data` is too early in TWRP;
+   even `crypto.ready=1` is set *before* its system-wide DE key setup.
+   Do not auto-start at either of those points before verifying readiness.
 3. `recovery/root/ueventd.qcom.rc` grants stock `system:system 0660`
    access to /dev/k250a and /dev/ssp.
 4. The original Galaxy M55 `hermesd`, eight vendor libraries and **three
@@ -59,6 +60,8 @@ read secrets.
 ## Validation (TWRP, after test build)
 
 ```bat
+adb shell ls -ld /data/vendor/gatekeeper
+adb shell setprop ctl.start hermesd
 adb shell getprop init.svc.hermesd
 adb shell ls -l /vendor/bin/hermesd /dev/k250a /dev/ssp
 adb shell "lshal 2>/dev/null | grep -i weaver"
