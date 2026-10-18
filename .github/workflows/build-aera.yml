@@ -97,6 +97,26 @@ jobs:
           grep -q 'AERA_INCLUDE_FBE_METADATA_DECRYPT := true' "$tree/BoardConfig.mk"
           grep -q 'AERA_INCLUDE_CRYPTO_FBE := true' "$tree/BoardConfig.mk"
           grep -q 'PLATFORM_SECURITY_PATCH := 2025-12-01' "$tree/BoardConfig.mk"
+          # Android 16 fsgen enforces unique members in each super group.
+          # Check BEFORE the ~15-minute repo sync / memory-heavy Soong step.
+          part_line=$(sed -nE '/^BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST[[:space:]]*:?=/ { s/^[^=]*=[[:space:]]*//; s/[[:space:]]*#.*$//; p; }' "$tree/BoardConfig.mk")
+          if [[ -z "$part_line" ]]; then
+            echo "::error::Samsung super partition list is missing"
+            exit 1
+          fi
+          unique_parts=$(printf '%s\\n' $part_line | sort -u | wc -l)
+          total_parts=$(printf '%s\\n' $part_line | wc -l)
+          if [[ "$unique_parts" -ne "$total_parts" ]]; then
+            printf 'Duplicate super partitions: '
+            printf '%s\\n' $part_line | sort | uniq -d
+            echo "::error::Duplicate partitions in BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST"
+            exit 1
+          fi
+          if [[ " $part_line " != *" vendor_dlkm "* ]]; then
+            echo "::error::Missing Galaxy M55 vendor_dlkm logical partition"
+            exit 1
+          fi
+          echo "Super logical partitions ($total_parts): $part_line"
           for name in             vendor/bin/hermesd             vendor/lib64/android.hardware.weaver@1.0.so             vendor/lib64/libhwvault.so             vendor/lib64/libshctrl.so             vendor/lib64/libese-grdg.so             vendor/lib64/libhermes_bdbridge.so             vendor/lib64/vendor.samsung.hardware.security.hermes-V1-ndk_platform.so             vendor/lib64/vendor.samsung.hardware.security.drk-V1-ndk_platform.so             vendor/lib64/vendor.samsung.hardware.security.drk@2.0.so             vendor/etc/secnvm/k250a_47000301_0.img             vendor/etc/secnvm/k250a_47000305_c.img             vendor/etc/secnvm/k250a_47000306_1.img; do
             if [[ ! -s "$tree/recovery/root/$name" ]]; then
               echo "::error::Missing Hermes blob: recovery/root/$name"
