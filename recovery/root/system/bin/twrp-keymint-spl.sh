@@ -10,6 +10,7 @@ SYS=/mnt/twrp_stock_system_spl
 VEN=/mnt/twrp_stock_vendor_spl
 SYSD=/dev/block/bootdevice/by-name/system
 VEND=/dev/block/bootdevice/by-name/vendor
+BOOT=/dev/block/bootdevice/by-name/boot
 RESETPROP=/system/bin/resetprop
 SETPROP=/system/bin/setprop
 KEYMINT=vendor.keymint-default
@@ -36,6 +37,28 @@ read_prop() {
             esac
         done < "$p"
     done
+    return 1
+}
+
+read_boot_spl() {
+    # Android boot image header v0/v1/v2 has a packed os_version at offset
+    # 44. This field records the signed boot image patch YEAR+MONTH.
+    # Never inspect metadata key blobs or EFS to determine an SPL.
+    [ -b "$BOOT" ] || return 1
+    [ "$(/system/bin/dd if="$BOOT" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || return 1
+    raw=$(/system/bin/od -An -tu4 -j44 -N4 "$BOOT" 2>/dev/null) || return 1
+    set -- $raw
+    word="${1:-}"
+    case "$word" in
+        ''|*[!0-9]*) return 1;;
+    esac
+    year=$((2000 + ((word >> 4) & 127)))
+    month=$((word & 15))
+    if [ "$year" -ge 2020 ] && [ "$year" -le 2099 ] &&
+       [ "$month" -ge 1 ] && [ "$month" -le 12 ]; then
+        printf '%04d-%02d-01\n' "$year" "$month"
+        return 0
+    fi
     return 1
 }
 
@@ -122,6 +145,13 @@ if ! valid_spl "$os_spl" || ! valid_spl "$ven_spl"; then
     exit 1
 fi
 
+boot_spl=$(read_boot_spl)
+if valid_spl "$boot_spl"; then
+    say "Installed boot image SPL $boot_spl (Android boot header)"
+else
+    say "Stock boot image SPL unknown; leaving bootimage property unchanged"
+fi
+
 say "Installed Android $os_release, system SPL $os_spl, vendor SPL $ven_spl"
 # KeyMint is still stopped. Do NOT set these after its TEE init!
 if ! "$RESETPROP" ro.build.version.release "$os_release" ||
@@ -130,6 +160,12 @@ if ! "$RESETPROP" ro.build.version.release "$os_release" ||
     say "resetprop failed; launch baseline KeyMint for diagnostics"
     finish fallback
     exit 1
+fi
+if valid_spl "$boot_spl"; then
+    # Only a verified stock Android boot header may set the boot patch.
+    "$RESETPROP" ro.bootimage.build.version.security_patch "$boot_spl" || \
+        say "Could not update optional bootimage SPL property"
+    "$SETPROP" recovery.keymint_spl.boot "$boot_spl"
 fi
 "$SETPROP" recovery.keymint_spl.system "$os_spl"
 "$SETPROP" recovery.keymint_spl.vendor "$ven_spl"
