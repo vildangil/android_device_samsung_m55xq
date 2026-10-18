@@ -130,10 +130,14 @@ BOARD_AVB_RECOVERY_ALGORITHM := SHA256_RSA4096
 BOARD_AVB_RECOVERY_ROLLBACK_INDEX := 1
 BOARD_AVB_RECOVERY_ROLLBACK_INDEX_LOCATION := 1
 
-# Match the installed Android 16 system/vendor SPL during KeyMint startup.
-# The artificial 2099 patch levels break KeyMint keyblob version validation.
-PLATFORM_SECURITY_PATCH := 2025-12-01
-VENDOR_SECURITY_PATCH := 2025-12-01
+# Testing ONLY on firmware using May 2026 KeyMint keyblob patchlevels.
+# Friend's F55 (SM-E556B, bootloader E556BXXS4BYH2) metadata key:
+# OS 202605, vendor 20260505, boot 20260501. Samsung KeyMint refuses
+# older values with km_check_key_os_version_patchlevels and error -33.
+# Do not merge into the December 2025 stable TWRP branch: each device's
+# real security patch level must be matched before KeyMint initializes.
+PLATFORM_SECURITY_PATCH := 2026-05-05
+VENDOR_SECURITY_PATCH := 2026-05-05
 PLATFORM_VERSION := 16.1.0
 
 # Encryption
