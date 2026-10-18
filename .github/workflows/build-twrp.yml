@@ -216,6 +216,16 @@ jobs:
               echo "::error::Hermes executable has no +x Git file mode"
               exit 1
             }
+            if [[ "${{ inputs.tree_ref }}" == "test/twrp-auto-spl" ]]; then
+              test -s "$GITHUB_WORKSPACE/device_tree/recovery/root/system/bin/twrp-keymint-spl.sh" || {
+                echo "::error::Missing dynamic KeyMint SPL detector"
+                exit 1
+              }
+              grep -q 'start twrp-keymint-spl' "$GITHUB_WORKSPACE/device_tree/recovery/root/init.recovery.qcom.rc" || {
+                echo "::error::KeyMint auto-SPL init hook missing"
+                exit 1
+              }
+            fi
           fi
           # Reject accidental TeamWin fallback at every build stage.
           grep -Eq '^TW_DEVICE_VERSION[[:space:]]*:=[[:space:]]*VildanG[[:space:]]*$' \
