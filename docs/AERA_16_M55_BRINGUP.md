@@ -107,3 +107,34 @@ Actions run: https://github.com/vildangil/android_device_samsung_m55xq/actions/r
   Telegram notifications, Odin TAR upload and resource monitoring remain.
 - Build #5 must be a **new Run workflow**, not rerun of old attempt.
   Compilation success and hardware operation are still unverified.
+
+## Build #5 (2026-10-18): AERA recovery AeraSecrets link failure
+
+Actions run: https://github.com/vildangil/android_device_samsung_m55xq/actions/runs/39118269204
+
+- AERA source sync, Samsung super partition validation, Soong bootstrap,
+  and nearly all Android 16 compile targets succeeded (~93%, 24153/25930).
+- The final recovery executable link failed with two missing C++ methods:
+  `AeraSecrets::UsePrimaryWlan(std::string const&)` and
+  `AeraSecrets::SetNasPrivateKey(std::string const&)`.
+- Both functions are implemented in the upstream
+  `bootable/recovery/aera_secrets/aera_secrets.cpp`.
+  `bootable/recovery/Android.mk` only adds that entire source file when
+  `OF_ENABLE_WLAN=1`, but `libaera_recovery_host` invokes both
+  unconditionally. Device config does not enable OF_ENABLE_WLAN.
+- Added `patches/aera/fix_aera_secrets_link.py` to this device branch.
+  The independent AERA workflow applies it after the official upstream
+  repo sync and before building. It moves only `aera_secrets.cpp`
+  to the unconditional `recovery` source list.
+- The original optional WLAN/supplicant/NAS transport modules stay
+  under the WLAN feature gate; no extra dependencies are enabled.
+- If the upstream Android.mk structure changes, the patch fails early
+  rather than silently generating duplicate source inputs.
+- The correction is applied to the **build workspace copy only**:
+  no direct modifications to the official AERA Git repository.
+  Stock M55 TWRP and F55 KeyMint experiments remain untouched.
+
+Next: create a NEW GitHub Actions workflow run using
+`android-12.1` and `device_ref=port/aera-16.0-m55xq`. The next
+link stage and final image size are not yet verified; don't flash
+until the build succeeds and hardware testing can begin.
