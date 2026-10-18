@@ -80,7 +80,12 @@ on fs
 on post-fs-data
     mkdir /data/vendor/keymaster 0775 root root
 
+# The SPL worker is the only permitted starter of KeyMint in this
+# experimental branch. Otherwise class_start default may auto-run the
+# service with the TWRP build-time December 2025 patch levels.
 service vendor.keymint-default /system/bin/android.hardware.security.keymint-service
+    class hal
+    disabled
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
     user root
     group root drmrpc
