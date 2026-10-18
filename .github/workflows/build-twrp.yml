@@ -4,16 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       tree_ref:
-        description: Device tree branch to build
+        description: Active TWRP branch (auto-SPL + KeyMint synchronization)
         required: true
         type: choice
-        default: fix/twrp-fbe-preflight
+        default: test/twrp-auto-spl
         options:
-          - fix/twrp-fbe-preflight
-          - fix/twrp-weaver-hermes
-          - test/twrp-f55-may2026-spl
           - test/twrp-auto-spl
-          - android-12.1
       NOTES:
         description: Optional note to include in Telegram updates
         required: false
