@@ -49,6 +49,9 @@ on init
 on boot
     start health-hal-2-1
     start vendor.keymint-default
+    # Do not block boot waiting for the late DWC3 UDC. The helper retries
+    # an unbound ADB gadget in the background after hardware enumerates.
+    start m55-usb-late-bind
 
     # Galaxy M55 battery/charger power_supply devices are registered only
     # after ADSP (remoteproc0) boots and PMIC GLINK connects.
@@ -85,4 +88,13 @@ service vendor.keymint-default /system/bin/android.hardware.security.keymint-ser
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
     user root
     group root drmrpc
+    seclabel u:r:recovery:s0
+
+# Diagnostic/recovery ADB transport helper. Handles a late USB UDC only;
+# does not touch firmware, userdata, encryption or existing bound gadgets.
+service m55-usb-late-bind /system/bin/sh /system/bin/m55-usb-late-bind.sh
+    disabled
+    oneshot
+    user root
+    group root
     seclabel u:r:recovery:s0
