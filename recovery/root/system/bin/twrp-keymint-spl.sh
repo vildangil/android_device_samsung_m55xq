@@ -6,7 +6,6 @@
 # Do not read/write any /data, /metadata, EFS or Weaver state.
 
 LOG=/tmp/twrp-keymint-spl.log
-MOUNTS=/proc/mounts
 SYS=/mnt/twrp_stock_system_spl
 VEN=/mnt/twrp_stock_vendor_spl
 SYSD=/dev/block/bootdevice/by-name/system
@@ -29,7 +28,7 @@ read_prop() {
                 "$k="*)
                     value="${line#*=}"
                     value="${value%%#*}"
-                    value="$(printf '%s' "$value" | /system/bin/tr -d ' \\r\\t')"
+                    value="$(printf '%s' "$value" | /system/bin/tr -d '\r\t ')"
                     [ -n "$value" ] || continue
                     printf '%s\n' "$value"
                     return 0
