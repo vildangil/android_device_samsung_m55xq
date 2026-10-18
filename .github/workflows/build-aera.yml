@@ -204,6 +204,18 @@ jobs:
           cmp "$GITHUB_WORKSPACE/device_tree/BoardConfig.mk" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/BoardConfig.mk"
           cmp "$GITHUB_WORKSPACE/device_tree/recovery.fstab" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/recovery.fstab"
 
+      - name: Stage AOSP VNDK32 KeyMint AIDL libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Stock Samsung KeyMint needs the old -V1-ndk_platform ABI;
+          # AERA Android 16 does not package it by default.
+          # Keep the proprietary binary unchanged and copy only matching
+          # Android 12L (VNDK v32) AOSP prebuilt libraries into the RAM disk.
+          tree="$GITHUB_WORKSPACE/aera/device/samsung/m55xq"
+          python3 "$tree/patches/aera/stage_vndk32_keymint.py" \
+            "$GITHUB_WORKSPACE/aera" "$tree"
+          test -s "$tree/recovery/root/system/lib64/android.hardware.security.keymint-V1-ndk_platform.so"
       - name: Telegram - compiling AERA recovery
         shell: bash
         env:
