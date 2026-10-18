@@ -1,0 +1,466 @@
+name: Build AERA Recovery 16.0 (Galaxy M55)
+
+on:
+  # Run the new device-tree revision when a bring-up fix lands. Only this
+  # isolated AERA branch is built automatically, never the TWRP branches.
+  push:
+    branches:
+      - port/aera-16.0-m55xq
+    paths:
+      - 'BoardConfig.mk'
+      - 'device.mk'
+      - 'recovery.fstab'
+      - 'recovery/**'
+      - 'patches/aera/**'
+      - '.github/workflows/build-aera.yml'
+  workflow_dispatch:
+    inputs:
+      device_ref:
+        description: Isolated AERA M55 device-tree branch
+        required: true
+        default: port/aera-16.0-m55xq
+        type: string
+      NOTES:
+        description: Optional note included in Telegram updates
+        required: false
+        type: string
+        default: ''
+      TG_RECIPENT:
+        description: Override Telegram chat ID (empty = CHAT_ID secret)
+        required: false
+        type: string
+        default: ''
+      VERBOSE:
+        description: Send progress updates to Telegram
+        required: true
+        type: boolean
+        default: true
+      TG_UPLOAD:
+        description: Upload complete Odin TAR and checksums to Telegram
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# AERA Android 16 Soong bootstrap is long-running. Do not SIGTERM the
+# previous build when another workflow_dispatch is triggered.
+concurrency:
+  group: m55xq-aera-${{ github.ref }}-${{ github.event.inputs.device_ref || 'port/aera-16.0-m55xq' }}
+  cancel-in-progress: false
+
+jobs:
+  recovery:
+    name: AERA 16.0 / m55xq (experimental)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      ALLOW_MISSING_DEPENDENCIES: "true"
+      CCACHE_DISABLE: "1"
+      AERA_BUILD_DEVICE: m55xq
+      # Limit Go/Soong bootstrap parallelism on 15.6 GiB hosted runners.
+      GOMAXPROCS: "2"
+      TG_RECIPENT: ${{ inputs.TG_RECIPENT }}
+      TG_VERBOSE: ${{ github.event_name == 'push' || inputs.VERBOSE }}
+      TG_UPLOAD: ${{ github.event_name == 'push' || inputs.TG_UPLOAD }}
+      RUN_NUM: ${{ github.run_number }}_${{ github.run_attempt }}
+
+    steps:
+      - name: Check out existing Telegram CI helpers
+        uses: actions/checkout@v4
+        with:
+          ref: android-12.1
+          path: ci_helpers
+          persist-credentials: false
+
+      - name: Telegram - AERA workflow started
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          NOTES: ${{ inputs.NOTES }}
+        run: |
+          echo "TG_BUILD_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          bash "$TG" msg "gh $RUN_NUM: AERA Recovery 16.0 / m55xq workflow started%nlgh $RUN_NUM: device branch: port/aera-16.0-m55xq"
+          if [[ -n "$NOTES" ]]; then
+            NOTE_ESCAPED=$(bash "$TG" escape "${NOTES:0:650}")
+            bash "$TG" msg "gh $RUN_NUM: $NOTE_ESCAPED"
+          fi
+
+      - name: Check out selected experimental device tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.device_ref || 'port/aera-16.0-m55xq' }}
+          path: device_tree
+          persist-credentials: false
+
+      - name: Assert isolated AERA branch and required Hermes payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event.inputs.device_ref || 'port/aera-16.0-m55xq' }}" != "port/aera-16.0-m55xq" ]]; then
+            echo "::error::AERA bring-up must use its isolated port/aera-16.0-m55xq branch."
+            exit 1
+          fi
+          tree="$GITHUB_WORKSPACE/device_tree"
+          grep -q 'AERA_INCLUDE_CRYPTO := true' "$tree/BoardConfig.mk"
+          grep -q 'AERA_INCLUDE_FBE_METADATA_DECRYPT := true' "$tree/BoardConfig.mk"
+          grep -q 'AERA_INCLUDE_CRYPTO_FBE := true' "$tree/BoardConfig.mk"
+          grep -q 'PLATFORM_SECURITY_PATCH := 2025-12-01' "$tree/BoardConfig.mk"
+          # Android 16 fsgen enforces unique members in each super group.
+          # Check BEFORE the ~15-minute repo sync / memory-heavy Soong step.
+          part_line=$(sed -nE '/^BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST[[:space:]]*:?=/ { s/^[^=]*=[[:space:]]*//; s/[[:space:]]*#.*$//; p; }' "$tree/BoardConfig.mk")
+          if [[ -z "$part_line" ]]; then
+            echo "::error::Samsung super partition list is missing"
+            exit 1
+          fi
+          unique_parts=$(printf '%s\n' $part_line | sort -u | wc -l)
+          total_parts=$(printf '%s\n' $part_line | wc -l)
+          if [[ "$unique_parts" -ne "$total_parts" ]]; then
+            printf 'Duplicate super partitions: '
+            printf '%s\n' $part_line | sort | uniq -d
+            echo "::error::Duplicate partitions in BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST"
+            exit 1
+          fi
+          if [[ " $part_line " != *" vendor_dlkm "* ]]; then
+            echo "::error::Missing Galaxy M55 vendor_dlkm logical partition"
+            exit 1
+          fi
+          echo "Super logical partitions ($total_parts): $part_line"
+          for name in             vendor/bin/hermesd             vendor/lib64/android.hardware.weaver@1.0.so             vendor/lib64/libhwvault.so             vendor/lib64/libshctrl.so             vendor/lib64/libese-grdg.so             vendor/lib64/libhermes_bdbridge.so             vendor/lib64/vendor.samsung.hardware.security.hermes-V1-ndk_platform.so             vendor/lib64/vendor.samsung.hardware.security.drk-V1-ndk_platform.so             vendor/lib64/vendor.samsung.hardware.security.drk@2.0.so             vendor/etc/secnvm/k250a_47000301_0.img             vendor/etc/secnvm/k250a_47000305_c.img             vendor/etc/secnvm/k250a_47000306_1.img; do
+            if [[ ! -s "$tree/recovery/root/$name" ]]; then
+              echo "::error::Missing Hermes blob: recovery/root/$name"
+              exit 1
+            fi
+          done
+          test -x "$tree/recovery/root/vendor/bin/hermesd"
+          test -s "$tree/recovery/root/vendor/etc/init/hermesd.rc"
+          test -s "$tree/recovery/root/vendor/etc/vintf/manifest/iweaver_v1_manifest.xml"
+          test -s "$tree/recovery/root/system/bin/hermesd-autostart.sh"
+          test -s "$tree/patches/aera/fix_aera_secrets_link.py"
+          echo "M55 Hermes, FBE and KeyMint source preflight passed"
+
+      - name: Reclaim runner disk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/local/share/powershell /opt/hostedtoolcache /usr/local/lib/node_modules
+          sudo docker image prune -af || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install AERA 16.0 build requirements
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison build-essential curl flex g++-multilib gcc-multilib git git-lfs gnupg gperf lib32z1-dev libelf-dev liblz4-tool libncurses-dev libssl-dev libxml2-utils lzop pngcrush rsync squashfs-tools xsltproc zip unzip zlib1g-dev python3 python-is-python3 python3-pip
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Telegram - source sync started
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          if [[ "$TG_VERBOSE" == "true" ]]; then
+            TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+            bash "$TG" msg "gh $RUN_NUM: syncing official AERA Android 16 sources%nlgh $RUN_NUM: manifest: AERA-Recovery/android_manifest, aera-16.0"
+          fi
+
+      - name: Initialize and sync official AERA Android 16 sources
+        id: sync
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/aera"
+          cd "$GITHUB_WORKSPACE/aera"
+          repo init --depth=1 -u https://github.com/AERA-Recovery/android_manifest.git -b aera-16.0
+          if ! repo sync -c --force-sync --no-clone-bundle --no-tags -j4 2>&1 | tee "$RUNNER_TEMP/aera-sync.log"; then
+            echo "::warning::Source sync failed; retrying with two jobs"
+            sleep 20
+            repo sync -c --force-sync --no-clone-bundle --no-tags -j2 2>&1 | tee -a "$RUNNER_TEMP/aera-sync.log"
+          fi
+          df -h /
+          test -f build/envsetup.sh
+          test -f bootable/recovery/aera_build.mk
+          test -f vendor/recovery/AERA_A16.sh
+
+      - name: Patch upstream AERA secrets linker configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/aera"
+          # Upstream Android.mk compiles AeraSecrets only if OF_ENABLE_WLAN=1,
+          # but libaera_recovery_host uses secrets with WLAN disabled.
+          # Keep Wi-Fi disabled and compile just the credentials translation
+          # unit unconditionally, avoiding extra device-specific dependencies.
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_aera_secrets_link.py"
+          grep -n -F 'aera_secrets/aera_secrets.cpp' bootable/recovery/Android.mk
+
+      - name: Reuse existing Samsung Super logical mappings
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AERA CreateLogicalPartitions() already maps all six dm devices,
+          # then fs_mgr_update_logical_partition() attempts to recreate them.
+          # Verify and reuse an existing mapper block device when appropriate.
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_premapped_super.py" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
+          grep -q 'M55_PREMAPPED_SUPER_RECOVERY' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
+
+      - name: Install M55 AERA device tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/aera/device/samsung"
+          cp -a "$GITHUB_WORKSPACE/device_tree" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq"
+          rm -rf "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/.git" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/.github"
+          cmp "$GITHUB_WORKSPACE/device_tree/BoardConfig.mk" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/BoardConfig.mk"
+          cmp "$GITHUB_WORKSPACE/device_tree/recovery.fstab" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/recovery.fstab"
+
+      - name: Stage AOSP VNDK32 KeyMint AIDL libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Stock Samsung KeyMint needs the old -V1-ndk_platform ABI;
+          # AERA Android 16 does not package it by default.
+          # Keep the proprietary binary unchanged and copy only matching
+          # Android 12L (VNDK v32) AOSP prebuilt libraries into the RAM disk.
+          tree="$GITHUB_WORKSPACE/aera/device/samsung/m55xq"
+          python3 "$tree/patches/aera/stage_vndk32_keymint.py" \
+            "$GITHUB_WORKSPACE/aera" "$tree"
+          test -s "$tree/recovery/root/system/lib64/android.hardware.security.keymint-V1-ndk_platform.so"
+      - name: Telegram - compiling AERA recovery
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          bash "$TG" msg "gh $RUN_NUM: recovery name: AERA%nlgh $RUN_NUM: recovery ver: aera-16.0%nlgh $RUN_NUM: device: m55xq%nlgh $RUN_NUM: device commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: compiling adbd + recoveryimage"
+
+      - name: Record available memory before AERA compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Host resources before Soong bootstrap"
+          free -h
+          df -h /
+          echo "vCPUs: $(nproc)"
+          echo "AERA build parallelism: 2 (memory-conservative)"
+          echo "Actions run: $GITHUB_RUN_ID, attempt: $GITHUB_RUN_ATTEMPT"
+
+      - name: Configure disk-safe swap for Android 16 Soong
+        shell: bash
+        run: |
+          set -euo pipefail
+          free -h
+          df -h "$RUNNER_TEMP"
+          echo "vm.swappiness=$(cat /proc/sys/vm/swappiness)"
+          avail_kb=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          avail_gib=$((avail_kb / 1024 / 1024))
+          # Keep a minimum of ~12-14 GiB for Soong/Ninja outputs.
+          # Disk is shared by checkout, the Android source tree, and swap.
+          if (( avail_gib >= 26 )); then
+            swap_mib=8192
+          elif (( avail_gib >= 17 )); then
+            swap_mib=4096
+          else
+            swap_mib=0
+          fi
+          if (( swap_mib == 0 )); then
+            echo "::warning::Only ${avail_gib} GiB free; not creating swap to avoid filling runner disk."
+          else
+            swapfile="$RUNNER_TEMP/aera-build.swap"
+            echo "Creating ${swap_mib} MiB swapfile ($avail_gib GiB disk free)"
+            if ! sudo fallocate -l "${swap_mib}M" "$swapfile"; then
+              sudo dd if=/dev/zero of="$swapfile" bs=1M count="$swap_mib" status=progress
+            fi
+            sudo chmod 600 "$swapfile"
+            sudo mkswap "$swapfile"
+            if sudo swapon "$swapfile"; then
+              echo "Swap enabled to reduce risk of OOM during Soong bootstrap"
+              sudo sysctl -w vm.swappiness=15 || true
+            else
+              echo "::warning::swapon rejected by the runner; continuing without swap."
+              sudo rm -f "$swapfile"
+            fi
+          fi
+          free -h
+          df -h "$RUNNER_TEMP"
+
+      - name: Build AERA recovery.img
+        id: compile
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$GITHUB_WORKSPACE/aera"
+          export LC_ALL=C
+          # Go/Soong may allocate >16 GiB before Ninja starts.
+          # Bound Go's live heap target while allowing external compile tools.
+          export GOMEMLIMIT=10GiB
+          monitor_pid=""
+          cleanup_monitor() {
+            if [[ -n "$monitor_pid" ]]; then
+              kill "$monitor_pid" 2>/dev/null || true
+              wait "$monitor_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_monitor EXIT
+          (
+            while sleep 90; do
+              echo "::notice::AERA heartbeat $(date -u '+%Y-%m-%d %H:%M:%S UTC') (Soong may be silent while generating build graph)"
+              free -h
+              df -h /
+              echo "Top processes by resident memory (KiB):"
+              ps -eo pid,rss,etime,comm --sort=-rss | head -n 12 || true
+              if [[ -r /proc/pressure/memory ]]; then
+                cat /proc/pressure/memory
+              fi
+            done
+          ) 2>&1 | tee -a "$RUNNER_TEMP/aera-resources.log" &
+          monitor_pid=$!
+          {
+            set +e
+            source build/envsetup.sh
+            set -e
+            type lunch
+            lunch twrp_m55xq-bp2a-eng
+            if [[ "${TARGET_PRODUCT:-}" != "twrp_m55xq" ]]; then
+              echo "::error::AERA lunch did not select Galaxy M55"
+              exit 1
+            fi
+            # AERA A16 Soong bootstrap needs nearly all hosted-runner RAM;
+            # disk-safe swap is enabled above if enough storage is free.
+            mka -j2 adbd recoveryimage
+          } 2>&1 | tee "$RUNNER_TEMP/aera-build.log"
+
+      - name: Verify image, partition size and make Odin package
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$GITHUB_WORKSPACE/aera/out/target/product/m55xq/recovery.img"
+          test -s "$image"
+          actual=$(stat -c %s "$image")
+          max=112070656
+          if (( actual > max )); then
+            echo "::error::AERA image ($actual bytes) exceeds M55 recovery partition ($max bytes)"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$image" "$GITHUB_WORKSPACE/artifacts/recovery.img"
+          printf 'AERA Android 16 / Samsung m55xq / EXPERIMENTAL\nDevice tree: %s\nDevice SHA: %s\n' "${{ github.event.inputs.device_ref || 'port/aera-16.0-m55xq' }}" "$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse HEAD)" > "$GITHUB_WORKSPACE/artifacts/BUILD_INFO.txt"
+          cd "$GITHUB_WORKSPACE/artifacts"
+          tar -cf aera-m55xq-odin.tar recovery.img
+          sha256sum recovery.img aera-m55xq-odin.tar > SHA256SUMS
+          ls -lh
+
+      - name: Upload experimental AERA recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: aera-m55xq-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 14
+          compression-level: 1
+          if-no-files-found: error
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aera-m55xq-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/aera-sync.log
+            ${{ runner.temp }}/aera-build.log
+            aera/out/verbose.log.gz
+            ${{ runner.temp }}/aera-resources.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Telegram - upload AERA Odin TAR and SHA256SUMS
+        if: ${{ success() && (github.event_name == 'push' || inputs.TG_UPLOAD) }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          if [[ "${TG_COMPILE_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+            DURATION="$((COMPILE_TIME / 60))m, $((COMPILE_TIME % 60))s"
+          else
+            DURATION="unknown"
+          fi
+          MD5=$(md5sum "$ARTIFACT_DIR/aera-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION="AERA 16.0 build succeeded in $DURATION%nlmd5: <code>$MD5</code>%nldevice: Samsung Galaxy M55 (m55xq)"
+          bash "$TG" up "$ARTIFACT_DIR/aera-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: AERA SHA256SUMS"
+
+      - name: Telegram - upload AERA failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ -f "$TG" ]]; then
+            NOW=$(date +%s)
+            if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+              ELAPSED=$(( NOW - TG_BUILD_STARTED ))
+              CAPTION="AERA build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+            else
+              CAPTION="AERA build failed"
+            fi
+            if [[ -s "$RUNNER_TEMP/aera-build.log" ]]; then
+              gzip -c "$RUNNER_TEMP/aera-build.log" > "$RUNNER_TEMP/aera-build.log.gz"
+              bash "$TG" up "$RUNNER_TEMP/aera-build.log.gz" "$CAPTION%nlstage: compilation"
+            elif [[ -s "$RUNNER_TEMP/aera-sync.log" ]]; then
+              gzip -c "$RUNNER_TEMP/aera-sync.log" > "$RUNNER_TEMP/aera-sync.log.gz"
+              bash "$TG" up "$RUNNER_TEMP/aera-sync.log.gz" "$CAPTION%nlstage: source sync"
+            else
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow failed before build logs were created"
+            fi
+          fi
+
+      - name: Telegram - final AERA result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ -f "$TG" ]]; then
+            NOW=$(date +%s)
+            if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+              ELAPSED=$(( NOW - TG_BUILD_STARTED ))
+              DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+            else
+              DURATION="unknown time"
+            fi
+            LINK="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            if [[ "$JOB_RESULT" == "success" ]]; then
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow succeeded in $DURATION%nlgh $RUN_NUM: <a href=\"$LINK\">view AERA artifacts</a>"
+            elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow cancelled in $DURATION"
+            else
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow failed in $DURATION%nlgh $RUN_NUM: <a href=\"$LINK\">view logs</a>"
+            fi
+          fi
