@@ -104,11 +104,11 @@ jobs:
             echo "::error::Samsung super partition list is missing"
             exit 1
           fi
-          unique_parts=$(printf '%s\\n' $part_line | sort -u | wc -l)
-          total_parts=$(printf '%s\\n' $part_line | wc -l)
+          unique_parts=$(printf '%s\n' $part_line | sort -u | wc -l)
+          total_parts=$(printf '%s\n' $part_line | wc -l)
           if [[ "$unique_parts" -ne "$total_parts" ]]; then
             printf 'Duplicate super partitions: '
-            printf '%s\\n' $part_line | sort | uniq -d
+            printf '%s\n' $part_line | sort | uniq -d
             echo "::error::Duplicate partitions in BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST"
             exit 1
           fi
