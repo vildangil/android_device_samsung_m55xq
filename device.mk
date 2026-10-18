@@ -13,7 +13,6 @@ PRODUCT_TARGET_VNDK_VERSION := 32
 # AERA 16.0 supplies the native recovery UI and OTA tools itself; avoid
 # installing the old Android 12.1 otapreopt/update_engine packages here.
 PRODUCT_PACKAGES += \
-    android.hardware.fastboot@1.0-impl-mock \
     fastbootd \
     android.hardware.health@2.1-impl \
     android.hardware.health@2.1-impl.recovery \
