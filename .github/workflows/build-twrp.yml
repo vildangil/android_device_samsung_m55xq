@@ -12,6 +12,7 @@ on:
           - fix/twrp-fbe-preflight
           - fix/twrp-weaver-hermes
           - test/twrp-f55-may2026-spl
+          - test/twrp-auto-spl
           - android-12.1
       NOTES:
         description: Optional note to include in Telegram updates
@@ -192,7 +193,7 @@ jobs:
           test -f "$GITHUB_WORKSPACE/twrp/device/qcom/twrp-common/Android.mk"
           # Fail quickly rather than compiling a recovery that advertises
           # Weaver but cannot launch Samsung's actual Hermes service.
-          if [[ "${{ inputs.tree_ref }}" == "fix/twrp-weaver-hermes" || "${{ inputs.tree_ref }}" == "test/twrp-f55-may2026-spl" ]]; then
+          if [[ "${{ inputs.tree_ref }}" == "fix/twrp-weaver-hermes" || "${{ inputs.tree_ref }}" == "test/twrp-f55-may2026-spl" || "${{ inputs.tree_ref }}" == "test/twrp-auto-spl" ]]; then
             for blob in \
               vendor/bin/hermesd \
               vendor/lib64/android.hardware.weaver@1.0.so \
