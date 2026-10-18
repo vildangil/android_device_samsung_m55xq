@@ -33,7 +33,7 @@
 # Data
 /metadata           ext4      /dev/block/by-name/metadata                      flags=display="Metadata";backup=1
 /data               f2fs      /dev/block/bootdevice/by-name/userdata           flags=display="Data";backup=1
-/cache              ext4      /dev/block/bootdevice/by-name/cache              flags=display="Cache";backup=1
+# /cache is defined in recovery.fstab; avoid a second, conflicting entry.
 
 # USB OTG
 /usb-otg       vfat   /dev/block/sdg1                    /dev/block/sdg       flags=display="USB-OTG";storage;wipeingui;removable
