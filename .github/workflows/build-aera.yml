@@ -209,8 +209,18 @@ jobs:
           # Verify and reuse an existing mapper block device when appropriate.
           python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_premapped_super.py" \
             "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
-          grep -q 'M55_PREMAPPED_SUPER_RECOVERY' \
+          grep -q 'M55_SLOTLESS_SUPER_COMPAT' \
             "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
+
+
+      - name: Preserve Samsung reboot modes and clear stale recovery BCB
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_reboot_reasons.py" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp-functions.cpp"
+          grep -q 'M55_EXPLICIT_NORMAL_REBOOT' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp-functions.cpp"
 
       - name: Install M55 AERA device tree
         shell: bash
