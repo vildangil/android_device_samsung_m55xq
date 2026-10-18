@@ -8,6 +8,26 @@ on:
         required: true
         default: port/aera-16.0-m55xq
         type: string
+      NOTES:
+        description: Optional note included in Telegram updates
+        required: false
+        type: string
+        default: ''
+      TG_RECIPENT:
+        description: Override Telegram chat ID (empty = CHAT_ID secret)
+        required: false
+        type: string
+        default: ''
+      VERBOSE:
+        description: Send progress updates to Telegram
+        required: true
+        type: boolean
+        default: true
+      TG_UPLOAD:
+        description: Upload complete Odin TAR and checksums to Telegram
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -25,8 +45,34 @@ jobs:
       ALLOW_MISSING_DEPENDENCIES: "true"
       CCACHE_DISABLE: "1"
       AERA_BUILD_DEVICE: m55xq
+      TG_RECIPENT: ${{ inputs.TG_RECIPENT }}
+      TG_VERBOSE: ${{ inputs.VERBOSE }}
+      TG_UPLOAD: ${{ inputs.TG_UPLOAD }}
+      RUN_NUM: ${{ github.run_number }}_${{ github.run_attempt }}
 
     steps:
+      - name: Check out existing Telegram CI helpers
+        uses: actions/checkout@v4
+        with:
+          ref: android-12.1
+          path: ci_helpers
+          persist-credentials: false
+
+      - name: Telegram - AERA workflow started
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          NOTES: ${{ inputs.NOTES }}
+        run: |
+          echo "TG_BUILD_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          bash "$TG" msg "gh $RUN_NUM: AERA Recovery 16.0 / m55xq workflow started%nlgh $RUN_NUM: device branch: port/aera-16.0-m55xq"
+          if [[ -n "$NOTES" ]]; then
+            NOTE_ESCAPED=$(bash "$TG" escape "${NOTES:0:650}")
+            bash "$TG" msg "gh $RUN_NUM: $NOTE_ESCAPED"
+          fi
+
       - name: Check out selected experimental device tree
         uses: actions/checkout@v4
         with:
@@ -82,6 +128,17 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Telegram - source sync started
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          if [[ "$TG_VERBOSE" == "true" ]]; then
+            TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+            bash "$TG" msg "gh $RUN_NUM: syncing official AERA Android 16 sources%nlgh $RUN_NUM: manifest: AERA-Recovery/android_manifest, aera-16.0"
+          fi
+
       - name: Initialize and sync official AERA Android 16 sources
         id: sync
         shell: bash
@@ -109,6 +166,17 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/.git" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/.github"
           cmp "$GITHUB_WORKSPACE/device_tree/BoardConfig.mk" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/BoardConfig.mk"
           cmp "$GITHUB_WORKSPACE/device_tree/recovery.fstab" "$GITHUB_WORKSPACE/aera/device/samsung/m55xq/recovery.fstab"
+
+      - name: Telegram - compiling AERA recovery
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo "TG_COMPILE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
+          bash "$TG" msg "gh $RUN_NUM: recovery name: AERA%nlgh $RUN_NUM: recovery ver: aera-16.0%nlgh $RUN_NUM: device: m55xq%nlgh $RUN_NUM: device commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: compiling adbd + recoveryimage"
 
       - name: Build AERA recovery.img
         id: compile
@@ -170,3 +238,79 @@ jobs:
             aera/out/verbose.log.gz
           retention-days: 7
           if-no-files-found: warn
+
+      - name: Telegram - upload AERA Odin TAR and SHA256SUMS
+        if: ${{ success() && inputs.TG_UPLOAD }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/artifacts"
+          if [[ "${TG_COMPILE_STARTED:-}" =~ ^[0-9]+$ ]]; then
+            COMPILE_TIME=$(( $(date +%s) - TG_COMPILE_STARTED ))
+            DURATION="$((COMPILE_TIME / 60))m, $((COMPILE_TIME % 60))s"
+          else
+            DURATION="unknown"
+          fi
+          MD5=$(md5sum "$ARTIFACT_DIR/aera-m55xq-odin.tar" | cut -d' ' -f1)
+          CAPTION="AERA 16.0 build succeeded in $DURATION%nlmd5: <code>$MD5</code>%nldevice: Samsung Galaxy M55 (m55xq)"
+          bash "$TG" up "$ARTIFACT_DIR/aera-m55xq-odin.tar" "$CAPTION"
+          bash "$TG" up "$ARTIFACT_DIR/SHA256SUMS" "gh $RUN_NUM: AERA SHA256SUMS"
+
+      - name: Telegram - upload AERA failure log
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ -f "$TG" ]]; then
+            NOW=$(date +%s)
+            if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+              ELAPSED=$(( NOW - TG_BUILD_STARTED ))
+              CAPTION="AERA build failed in $((ELAPSED / 60))m, $((ELAPSED % 60))s"
+            else
+              CAPTION="AERA build failed"
+            fi
+            if [[ -s "$RUNNER_TEMP/aera-build.log" ]]; then
+              gzip -c "$RUNNER_TEMP/aera-build.log" > "$RUNNER_TEMP/aera-build.log.gz"
+              bash "$TG" up "$RUNNER_TEMP/aera-build.log.gz" "$CAPTION%nlstage: compilation"
+            elif [[ -s "$RUNNER_TEMP/aera-sync.log" ]]; then
+              gzip -c "$RUNNER_TEMP/aera-sync.log" > "$RUNNER_TEMP/aera-sync.log.gz"
+              bash "$TG" up "$RUNNER_TEMP/aera-sync.log.gz" "$CAPTION%nlstage: source sync"
+            else
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow failed before build logs were created"
+            fi
+          fi
+
+      - name: Telegram - final AERA result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          TG="$GITHUB_WORKSPACE/ci_helpers/.github/scripts/telegram-notify.sh"
+          if [[ -f "$TG" ]]; then
+            NOW=$(date +%s)
+            if [[ "${TG_BUILD_STARTED:-}" =~ ^[0-9]+$ ]]; then
+              ELAPSED=$(( NOW - TG_BUILD_STARTED ))
+              DURATION="$((ELAPSED / 60))m, $((ELAPSED % 60))s"
+            else
+              DURATION="unknown time"
+            fi
+            LINK="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            if [[ "$JOB_RESULT" == "success" ]]; then
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow succeeded in $DURATION%nlgh $RUN_NUM: <a href=\"$LINK\">view AERA artifacts</a>"
+            elif [[ "$JOB_RESULT" == "cancelled" ]]; then
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow cancelled in $DURATION"
+            else
+              bash "$TG" msg "gh $RUN_NUM: AERA workflow failed in $DURATION%nlgh $RUN_NUM: <a href=\"$LINK\">view logs</a>"
+            fi
+          fi
