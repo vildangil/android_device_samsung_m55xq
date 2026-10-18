@@ -1,59 +1,29 @@
-#
 # Copyright (C) 2024 The Android Open Source Project
-# Copyright (C) 2024 SebaUbuntu's TWRP device tree generator
-#
+# Copyright (C) 2026 AERA Recovery Project contributors
 # SPDX-License-Identifier: Apache-2.0
-#
 
 LOCAL_PATH := device/samsung/m55xq
 
-# API levels
+# Preserve the proven TWRP device API/VNDK settings for the first AERA
+# bring-up. Validate them on hardware before adjusting crypto semantics.
 PRODUCT_SHIPPING_API_LEVEL := 30
-
-# Dynamic
 PRODUCT_USE_DYNAMIC_PARTITIONS := true
+PRODUCT_TARGET_VNDK_VERSION := 32
 
-# fastbootd
+# AERA 16.0 supplies the native recovery UI and OTA tools itself; avoid
+# installing the old Android 12.1 otapreopt/update_engine packages here.
 PRODUCT_PACKAGES += \
     android.hardware.fastboot@1.0-impl-mock \
-    fastbootd 
-
-# Health
-PRODUCT_PACKAGES += \
+    fastbootd \
     android.hardware.health@2.1-impl \
     android.hardware.health@2.1-impl.recovery \
-    android.hardware.health@2.1-service
-
-# Recovery modules/dependencies
-TARGET_RECOVERY_DEVICE_MODULES += \
-    libandroidicu 
-
-RECOVERY_LIBRARY_SOURCE_FILES += \
-    $(TARGET_OUT_SHARED_LIBRARIES)/libandroidicu.so 
-
-PRODUCT_PACKAGES += \
-    otapreopt_script \
-    update_engine \
-    update_engine_sideload \
-    update_verifier \
-
-# Health
-PRODUCT_PACKAGES += \
-    android.hardware.health@2.1-impl \
-    android.hardware.health@2.1-impl.recovery \
-    android.hardware.health@2.1-service
-
-# QCOM
-PRODUCT_PACKAGES += \
+    android.hardware.health@2.1-service \
     qcom_decrypt \
     qcom_decrypt_fbe
 
-# Soong namespaces
-PRODUCT_SOONG_NAMESPACES += \
-    $(LOCAL_PATH)
+# Keep ICU library linkage used by the proven Samsung encryption setup.
+TARGET_RECOVERY_DEVICE_MODULES += libandroidicu
+RECOVERY_LIBRARY_SOURCE_FILES += $(TARGET_OUT_SHARED_LIBRARIES)/libandroidicu.so
 
-# VNDK
-PRODUCT_TARGET_VNDK_VERSION := 32
-
-# Enable Fuse Passthrough
+PRODUCT_SOONG_NAMESPACES += $(LOCAL_PATH)
 PRODUCT_PROPERTY_OVERRIDES += persist.sys.fuse.passthrough.enable=true
