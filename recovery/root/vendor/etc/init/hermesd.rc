@@ -1,7 +1,19 @@
-# Galaxy M55: Samsung Hermes implements stock HIDL Weaver 1.0.
-# Experimental first validation is MANUAL (adb shell setprop ctl.start hermesd).
-# TWRP sets crypto.ready before DE keys have finished installing.
-# Do not auto-start it before /data/vendor/gatekeeper is accessible.
+# Galaxy M55 (SM-M556B): /vendor/bin/hermesd provides HIDL Weaver 1.0.
+# The recovery-mounted /data gets its DE keys after crypto.ready=1.
+# Start a separate, nonblocking worker to wait for the stock gatekeeper
+# directory on the real mounted /data, then start Hermes. Never create
+# gatekeeper state from recovery or attempt to reset the user's credentials.
+on property:crypto.ready=1 && property:hwservicemanager.ready=true
+    start hermesd-autostart
+
+service hermesd-autostart /system/bin/sh /system/bin/hermesd-autostart.sh
+    class hal
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
 service hermesd /vendor/bin/hermesd /data/vendor/gatekeeper
     class hal
     disabled
