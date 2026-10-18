@@ -33,22 +33,21 @@ on init
     setprop prepdecrypt.setpatch true
     setprop prepdecrypt.loglevel 2
     setprop logd.ready true
-    # Stock metadata key was created on Android 16 / 2025-12-01.
-    # The TWRP 12.1 ramdisk otherwise advertises Android 12 and 2099 SPL.
-    # KeyMint starts during 'on boot', before prepdecrypt fixes these values.
-    # Align the live props here, before KeyMint can deserialize the key.
-    # resetprop is provided by TW_INCLUDE_LIBRESETPROP.
-    # This ramdisk labels resetprop as rootfs, so exec without an explicit
-    # domain fails ("incorrect label or no domain transition").
-    # Run synchronously in recovery's SELinux context before KeyMint starts.
+    # Do NOT hardcode a security patch here. Different M55/F55 ROMs
+    # can have different SPLs even with the same recovery image.
+    # The separate nonblocking twrp-keymint-spl service waits for the
+    # dynamic super mappings, reads stock system/vendor build.prop
+    # read-only, and starts KeyMint after configuring those properties.
+    # Platform release is set to Android 16 for the initial recovery UI.
     exec u:r:recovery:s0 root root -- /system/bin/resetprop ro.build.version.release 16
-    exec u:r:recovery:s0 root root -- /system/bin/resetprop ro.build.version.security_patch 2025-12-01
-    exec u:r:recovery:s0 root root -- /system/bin/resetprop ro.vendor.build.security_patch 2025-12-01
     start health-hal-2-1
 
 on boot
     start health-hal-2-1
-    start vendor.keymint-default
+    # KeyMint must not start until real system/vendor SPLs have been
+    # detected. If detection fails, the worker starts baseline KeyMint
+    # rather than leaving decryption services permanently unavailable.
+    start twrp-keymint-spl
 
     # Galaxy M55 battery/charger power_supply devices are registered only
     # after ADSP (remoteproc0) boots and PMIC GLINK connects.
@@ -85,4 +84,14 @@ service vendor.keymint-default /system/bin/android.hardware.security.keymint-ser
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
     user root
     group root drmrpc
+    seclabel u:r:recovery:s0
+
+# Experimental auto-SPL detector. Runs concurrently with the TWRP UI,
+# which creates dm system/vendor nodes. Does NOT access encrypted data.
+service twrp-keymint-spl /system/bin/sh /system/bin/twrp-keymint-spl.sh
+    class hal
+    disabled
+    oneshot
+    user root
+    group root
     seclabel u:r:recovery:s0
