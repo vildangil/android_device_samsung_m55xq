@@ -1,18 +1,6 @@
 name: Build AERA Recovery 16.0 (Galaxy M55)
 
 on:
-  # Run the new device-tree revision when a bring-up fix lands. Only this
-  # isolated AERA branch is built automatically, never the TWRP branches.
-  push:
-    branches:
-      - port/aera-16.0-m55xq
-    paths:
-      - 'BoardConfig.mk'
-      - 'device.mk'
-      - 'recovery.fstab'
-      - 'recovery/**'
-      - 'patches/aera/**'
-      - '.github/workflows/build-aera.yml'
   workflow_dispatch:
     inputs:
       device_ref:
@@ -62,8 +50,8 @@ jobs:
       # Limit Go/Soong bootstrap parallelism on 15.6 GiB hosted runners.
       GOMAXPROCS: "2"
       TG_RECIPENT: ${{ inputs.TG_RECIPENT }}
-      TG_VERBOSE: ${{ github.event_name == 'push' || inputs.VERBOSE }}
-      TG_UPLOAD: ${{ github.event_name == 'push' || inputs.TG_UPLOAD }}
+      TG_VERBOSE: ${{ inputs.VERBOSE }}
+      TG_UPLOAD: ${{ inputs.TG_UPLOAD }}
       RUN_NUM: ${{ github.run_number }}_${{ github.run_attempt }}
 
     steps:
@@ -390,7 +378,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Telegram - upload AERA Odin TAR and SHA256SUMS
-        if: ${{ success() && (github.event_name == 'push' || inputs.TG_UPLOAD) }}
+        if: ${{ success() && inputs.TG_UPLOAD }}
         shell: bash
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
