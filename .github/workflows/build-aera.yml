@@ -32,9 +32,11 @@ on:
 permissions:
   contents: read
 
+# AERA Android 16 Soong bootstrap is long-running. Do not SIGTERM the
+# previous build when another workflow_dispatch is triggered.
 concurrency:
-  group: m55xq-aera-${{ github.ref }}
-  cancel-in-progress: true
+  group: m55xq-aera-${{ github.ref }}-${{ inputs.device_ref }}
+  cancel-in-progress: false
 
 jobs:
   recovery:
@@ -45,6 +47,8 @@ jobs:
       ALLOW_MISSING_DEPENDENCIES: "true"
       CCACHE_DISABLE: "1"
       AERA_BUILD_DEVICE: m55xq
+      # Limit Go/Soong bootstrap parallelism on 15.6 GiB hosted runners.
+      GOMAXPROCS: "2"
       TG_RECIPENT: ${{ inputs.TG_RECIPENT }}
       TG_VERBOSE: ${{ inputs.VERBOSE }}
       TG_UPLOAD: ${{ inputs.TG_UPLOAD }}
@@ -178,6 +182,17 @@ jobs:
           DEVICE_SHA=$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse --short HEAD)
           bash "$TG" msg "gh $RUN_NUM: recovery name: AERA%nlgh $RUN_NUM: recovery ver: aera-16.0%nlgh $RUN_NUM: device: m55xq%nlgh $RUN_NUM: device commit: <code>$DEVICE_SHA</code>%nlgh $RUN_NUM: compiling adbd + recoveryimage"
 
+      - name: Record available memory before AERA compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Host resources before Soong bootstrap"
+          free -h
+          df -h /
+          echo "vCPUs: $(nproc)"
+          echo "AERA build parallelism: 2 (memory-conservative)"
+          echo "Actions run: $GITHUB_RUN_ID, attempt: $GITHUB_RUN_ATTEMPT"
+
       - name: Build AERA recovery.img
         id: compile
         shell: bash
@@ -195,7 +210,9 @@ jobs:
               echo "::error::AERA lunch did not select Galaxy M55"
               exit 1
             fi
-            mka -j"$(nproc)" adbd recoveryimage
+            # Soong bootstrap requires ~16 GiB on AERA A16. The hosted
+            # runner exposes ~15.6 GiB; -j2 reduces peak memory pressure.
+            mka -j2 adbd recoveryimage
           } 2>&1 | tee "$RUNNER_TEMP/aera-build.log"
 
       - name: Verify image, partition size and make Odin package
