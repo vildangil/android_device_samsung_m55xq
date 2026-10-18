@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Stage the AOSP VNDK 32 KeyMint AIDL runtime for M55 recovery.
+
+Samsung's stock KeyMint executable is carried into the ramdisk unchanged.
+It requires the historical V1 -ndk_platform ABI, which modern Android 16
+recovery doesn't package automatically. Supply the exact AOSP v32 snapshot
+instead of substituting a V3 .so or changing Samsung's ELF NEEDED entries.
+This script operates only on the ephemeral CI build checkout; it never reads
+or modifies Android userdata, EFS or credential state.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import pathlib
+import shutil
+import subprocess
+import sys
+
+# VNDK-core legacy AIDL interfaces from the Android 12L (VNDK v32) snapshot.
+LEGACY_AIDL_LIBRARIES = (
+    "android.hardware.security.keymint-V1-ndk_platform.so",
+    "android.hardware.security.secureclock-V1-ndk_platform.so",
+    "android.hardware.security.sharedsecret-V1-ndk_platform.so",
+)
+
+
+def needed_libraries(path: pathlib.Path) -> str:
+    return subprocess.run(
+        ["readelf", "-d", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source_root", type=pathlib.Path,
+                        help="AERA Android 16 source tree after repo sync")
+    parser.add_argument("device_tree", type=pathlib.Path,
+                        help="Staged Samsung M55 tree inside the source root")
+    args = parser.parse_args()
+
+    executable = args.device_tree / (
+        "recovery/root/system/bin/android.hardware.security.keymint-service"
+    )
+    if not executable.is_file():
+        parser.error(f"missing original Samsung KeyMint binary: {executable}")
+
+    dependencies = needed_libraries(executable)
+    required = LEGACY_AIDL_LIBRARIES[0]
+    if required not in dependencies:
+        parser.error(f"unexpected Samsung KeyMint ABI: no dependency on {required}")
+
+    source = args.source_root / (
+        "prebuilts/vndk/v32/arm64/arch-arm64-armv8-a/shared/vndk-core"
+    )
+    destination = args.device_tree / "recovery/root/system/lib64"
+    destination.mkdir(parents=True, exist_ok=True)
+
+    for name in LEGACY_AIDL_LIBRARIES:
+        candidate = source / name
+        if not candidate.is_file() or candidate.read_bytes()[:4] != b"\\x7fELF":
+            parser.error(
+                f"missing or invalid AOSP arm64 VNDK32 prebuilt: {candidate}; "
+                "do not substitute a newer -V3-ndk library"
+            )
+        # e_machine 183 = EM_AARCH64; little-endian ELF64 required.
+        header = candidate.read_bytes()[:20]
+        if header[4] != 2 or header[5] != 1 or int.from_bytes(header[18:20], "little") != 183:
+            parser.error(f"not an ELF64 aarch64 shared library: {candidate}")
+
+        staged = destination / name
+        shutil.copy2(candidate, staged)
+        digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+        print(f"staged AOSP VNDK32 {name}: sha256={digest}", flush=True)
+    print(
+        "Legacy Samsung KeyMint dependency staged without patching binaries. "
+        "Full FBE/Keystore2/Hermes functionality still requires on-device testing.",
+        flush=True,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
