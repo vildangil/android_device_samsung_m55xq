@@ -110,3 +110,40 @@ Do not diagnose a second PIN failure until it is confirmed that the
 HIDL Weaver service is registered in recovery.
 
 **No factory reset or user credential changes are required.**
+
+
+## Recovery fstab additions (2026-10-18)
+
+The device has **two** TWRP partition-definition inputs:
+`recovery.fstab` (main fs_mgr file) and
+`recovery/root/system/etc/twrp.flags` (additional UI partitions).
+Previous TWRP logs show /cache was **already present in twrp.flags**
+but mount failed on `/dev/block/sda31` with
+`EXT4-fs: Can't find ext4 filesystem`. This cannot be solved merely by
+adding or moving a fstab entry; do not format it without identifying
+what the stock partition currently contains.
+
+This experiment explicitly declares the stock-confirmed partitions in
+`recovery.fstab`:
+- `/cache` -> `/dev/block/bootdevice/by-name/cache` (ext4 expected;
+  only a mount declaration, not a formatting operation).
+- `/mnt/vendor/persist` ->
+  `/dev/block/bootdevice/by-name/persist` (ext4, **read-only**,
+  no format/wipe/flash flags, calibration-sensitive).
+
+The duplicate /cache line was removed from `twrp.flags` to retain
+one authoritative entry. All pre-existing data/metadata/KeyMint/Weaver/
+battery settings remain unchanged. The ext4 layout is based on the
+M55 device fstab in `SavedByLight-WIP/lineage_device_samsung_m55xq`
+(`rootdir/etc/fstab.qcom`, `lineage-23.2`). Exact current stock
+filesystem signatures still require device verification.
+
+Read-only stock Android verification:
+
+```bat
+adb shell su -c "ls -l /dev/block/bootdevice/by-name/cache /dev/block/bootdevice/by-name/persist"
+adb shell su -c "blkid /dev/block/bootdevice/by-name/cache /dev/block/bootdevice/by-name/persist"
+adb shell su -c "cat /proc/mounts | grep -E ' /cache | /mnt/vendor/persist '"
+```
+
+Never format or wipe `/persist`, EFS, metadata or unknown cache contents.
