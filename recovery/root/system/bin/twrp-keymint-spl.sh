@@ -40,25 +40,61 @@ read_prop() {
     return 1
 }
 
+boot_u32() {
+    # Little-endian uint32 on the running arm64 device; read-only.
+    # od prints a number padded with spaces.
+    /system/bin/od -An -tu4 -j"$1" -N4 "$BOOT" 2>/dev/null
+}
+
 read_boot_spl() {
-    # Android boot image header v0/v1/v2 has a packed os_version at offset
-    # 44. This field records the signed boot image patch YEAR+MONTH.
-    # Never inspect metadata key blobs or EFS to determine an SPL.
-    [ -b "$BOOT" ] || return 1
-    [ "$(/system/bin/dd if="$BOOT" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || return 1
-    raw=$(/system/bin/od -An -tu4 -j44 -N4 "$BOOT" 2>/dev/null) || return 1
-    set -- $raw
+    # In Android boot headers v0-v2 the packed os_version is at offset 44.
+    # In GKI boot headers v3-v4 it is at offset 16 instead. The header
+    # version remains at offset 40 in BOTH layouts (AOSP bootimg.h).
+    # Do not read or modify any metadata, EFS, Gatekeeper or Weaver state.
+    if [ ! -b "$BOOT" ]; then
+        say "Stock boot block device unavailable"
+        return 1
+    fi
+    if [ "$(/system/bin/dd if="$BOOT" bs=8 count=1 2>/dev/null)" != "ANDROID!" ]; then
+        say "Stock boot block device has no ANDROID! boot image magic"
+        return 1
+    fi
+
+    header_version=$(boot_u32 40) || {
+        say "Cannot read stock boot header version (od unavailable?)"
+        return 1
+    }
+    set -- $header_version
+    case "${1:-}" in
+        0|1|2) version="$1"; version_offset=44;;
+        3|4) version="$1"; version_offset=16;;
+        *)
+            say "Unsupported stock boot image header version [${1:-empty}]"
+            return 1
+            ;;
+    esac
+
+    packed=$(boot_u32 "$version_offset") || {
+        say "Cannot read os_version from stock boot header v$version"
+        return 1
+    }
+    set -- $packed
     word="${1:-}"
     case "$word" in
-        ''|*[!0-9]*) return 1;;
+        ''|*[!0-9]*)
+            say "Invalid os_version field in boot header v$version"
+            return 1
+            ;;
     esac
     year=$((2000 + ((word >> 4) & 127)))
     month=$((word & 15))
     if [ "$year" -ge 2020 ] && [ "$year" -le 2099 ] &&
        [ "$month" -ge 1 ] && [ "$month" -le 12 ]; then
+        say "Stock boot header v$version: SPL year=$year month=$month"
         printf '%04d-%02d-01\n' "$year" "$month"
         return 0
     fi
+    say "Boot header v$version does not encode a valid patch month (year=$year month=$month)"
     return 1
 }
 
