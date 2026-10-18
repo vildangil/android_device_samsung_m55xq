@@ -36,6 +36,11 @@ scale. This branch implements read-only **runtime stock patch detection**.
   `build.prop` paths and parses:
   `ro.build.version.release` / `ro.build.version.security_patch`
   and `ro.vendor.build.security_patch`.
+- It separately inspects the **stock /boot** Android boot image header
+  (read-only, signature `ANDROID!`, packed `os_version` field at byte
+  offset 44, header v0-v2) to derive a boot patch month formatted
+  `YYYY-MM-01`. Only if that check passes it additionally sets
+  `ro.bootimage.build.version.security_patch`.
 - It validates the dates, updates the live props with resetprop
   **before** the KeyMint TEE service is started, then starts that
   service exactly once via `ctl.start`.
@@ -52,9 +57,11 @@ can attempt metadata decryption before the detector starts KeyMint.
 If that happens, the helper may resolve the correct SPLs while the
 initial automatic decrypt attempt has already failed. Examine the
 TWRP and logcat timelines before attempting any change to FBE logic.
-The boot key patch may also differ from OS/vendor; verify the KeyMint
-trace after this dynamic setup and do not infer that matching two
-properties always fixes every boot patch-level mismatch.
+The boot key patch may still differ from all reported properties.
+The optional Android boot-header parser supports **v0-v2 only**;
+if unsupported, missing or inconsistent, the boot patch is not
+guessed. Verify the KeyMint trace; do not infer that matching system
+and vendor properties always fixes boot patch-level mismatches.
 
 The detector does NOT alter the built-in BoardConfig December 2025
 fallback SPL or patch release values. It only changes runtime props
@@ -74,6 +81,8 @@ After the first boot, do not manually change KeyMint props. Collect:
 adb shell getprop recovery.keymint_spl.mode
 adb shell getprop recovery.keymint_spl.system
 adb shell getprop recovery.keymint_spl.vendor
+adb shell getprop recovery.keymint_spl.boot
+adb shell getprop ro.bootimage.build.version.security_patch
 adb shell getprop ro.build.version.security_patch
 adb shell getprop ro.vendor.build.security_patch
 adb shell getprop init.svc.vendor.keymint-default
