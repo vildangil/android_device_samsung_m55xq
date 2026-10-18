@@ -109,7 +109,10 @@ BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 
 BOARD_SUPER_PARTITION_SIZE := 9126805504 # TODO: Fix hardcoded value
 BOARD_SUPER_PARTITION_GROUPS := samsung_dynamic_partitions
-BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST := system system system vendor product odm system_ext
+# The Galaxy M55/F55 super partition contains six distinct logical
+# partitions. Repeating "system" here makes AERA/Android 16 fsgen reject
+# the entire super image with "Duplicate partitions found".
+BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST := system vendor product odm system_ext vendor_dlkm
 BOARD_SAMSUNG_DYNAMIC_PARTITIONS_SIZE := 9122611200 # TODO: Fix hardcoded value
 
 # Recovery
