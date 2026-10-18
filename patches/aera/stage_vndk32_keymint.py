@@ -99,7 +99,7 @@ def main() -> int:
             "VNDK32 libcrypto does not export sk_delete; "
             "do not install a mismatched crypto library"
         )
-    if libcrypto.read_bytes()[:6] != b"\\x7fELF\\x02\\x01":
+    if libcrypto.read_bytes()[:6] != bytes.fromhex("7f454c460201"):
         parser.error("VNDK32 libcrypto is not 64-bit little-endian ELF")
     compat = args.device_tree / (
         "recovery/root/system/lib64/keymint-compat/libcrypto.so"
