@@ -63,7 +63,7 @@ def main() -> int:
 
     for name in LEGACY_AIDL_LIBRARIES:
         candidate = source / name
-        if not candidate.is_file() or candidate.read_bytes()[:4] != b"\\x7fELF":
+        if not candidate.is_file() or candidate.read_bytes()[:4] != b"\x7fELF":
             parser.error(
                 f"missing or invalid AOSP arm64 VNDK32 prebuilt: {candidate}; "
                 "do not substitute a newer -V3-ndk library"
