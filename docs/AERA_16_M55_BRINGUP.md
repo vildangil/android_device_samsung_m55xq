@@ -83,3 +83,27 @@ adb shell dmesg > aera-m55-dmesg.txt
 No credentials, EFS, Weaver slots, gatekeeper contents or key blobs
 should be uploaded. Successful TWRP FBE is a reference, **not** proof
 that AERA Android 16 has equivalent runtime FBE initialization.
+
+
+## Build #4 (2026-10-18): Soong fsgen duplicate super partitions
+
+Actions run: https://github.com/vildangil/android_device_samsung_m55xq/actions/runs/39115218063
+
+- Source sync, Galaxy M55 tree preflight, RAM diagnostics and swap all
+  succeeded. Android 16 Soong reached 100% of its *bootstrap*, not
+  the recovery image build.
+- Its generated `twrp_m55xq_generated_super_image` failed in
+  `build/soong/fsgen/Android.bp:32:1`:
+  `Duplicate partitions found in the partition_groups property`.
+- Source: inherited `BoardConfig.mk` group
+  `BOARD_SAMSUNG_DYNAMIC_PARTITIONS_PARTITION_LIST := system system
+  system vendor product odm system_ext`.
+- Fix in this isolated AERA branch: six distinct logical partitions,
+  `system vendor product odm system_ext vendor_dlkm`, matching the
+  logical partitions mounted in the M55/F55 recovery test log.
+  TWRP reference branch untouched.
+- The `android-12.1` AERA Actions workflow now checks duplicate
+  group entries and the presence of vendor_dlkm **before repo sync**.
+  Telegram notifications, Odin TAR upload and resource monitoring remain.
+- Build #5 must be a **new Run workflow**, not rerun of old attempt.
+  Compilation success and hardware operation are still unverified.
