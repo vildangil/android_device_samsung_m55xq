@@ -1,13 +1,10 @@
-#
 # Copyright (C) 2024 The Android Open Source Project
-# Copyright (C) 2024 SebaUbuntu's TWRP device tree generator
-#
 # SPDX-License-Identifier: Apache-2.0
-#
-# ALL PBRP RELATED THINGS START WITH PB, ALL TWRP RELATED THINGS ARE USED FOR TWRP, SHRP, AND OFRP IN ABDROID 12.1 MANIFESTS
 
 PRODUCT_MAKEFILES := \
-    $(LOCAL_DIR)/twrp_m55xq.mk \
+    $(LOCAL_DIR)/twrp_m55xq.mk
 
+# AERA 16.0 / Android 16 uses bp2a release-config lunch selectors.
 COMMON_LUNCH_CHOICES := \
-    twrp_m55xq-eng \
+    twrp_m55xq-bp2a-eng \
+    twrp_m55xq-bp2a-userdebug
