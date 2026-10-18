@@ -30,10 +30,10 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 
 replace_once(
-    '''	const int result = property_set(ANDROID_RB_PROPERTY, value);
+    '''		const int result = property_set(ANDROID_RB_PROPERTY, value);
 		if (result != 0)
 			return result;''',
-    '''	LOGINFO("M55 reboot request: sys.powerctl=%s\\n", value);
+    '''		LOGINFO("M55 reboot request: sys.powerctl=%s\\n", value);
 		const int result = property_set(ANDROID_RB_PROPERTY, value);
 		if (result != 0) {
             LOGERR("M55: failed to request reboot mode (%s): %d\\n",
