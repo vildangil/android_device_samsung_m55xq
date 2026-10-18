@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Reuse early-mapped super partitions in AERA's partition manager.
+"""Fix AERA 16 recovery's missing boot-slot property on Samsung m55xq.
 
-AERA's Android 16 recovery startup creates /dev/block/dm-0 .. dm-5 via
-CreateLogicalPartitions() before Parse_Fstab()/Prepare_Super_Volume(). On
-the Galaxy M55, fs_mgr_update_logical_partition() can fail when asked to
-create those devices again. Preserve the existing verified block-device
-mapping rather than discarding the entire /system and /vendor entries.
+Samsung M55 reports ro.build.ab_update=true, but in recovery there are
+neither ro.boot.slot_suffix nor ro.boot.slot properties. AERA silently
+assigns slot B in that case, then tries to mount system_b, vendor_b, etc.
+The device's logical super metadata uses the unsuffixed partition names.
 
-This changes only a build checkout, not the phone's super metadata.
+Keep A/B handling for devices WITH an explicit boot slot, but use the
+unsuffixed partitions and metadata slot 0 when the bootloader supplied no
+slot. Read/mapper operations only; never rewrite on-device super metadata.
 """
 from pathlib import Path
 import sys
@@ -17,38 +18,106 @@ if len(sys.argv) != 2:
     raise SystemExit("usage: fix_premapped_super.py <AERA partitionmanager.cpp>")
 target = Path(sys.argv[1])
 source = target.read_text()
-marker = "M55_PREMAPPED_SUPER_RECOVERY"
+marker = "M55_SLOTLESS_SUPER_COMPAT"
 if marker in source:
-    print("AERA pre-mapped super fix already applied")
+    print("M55 slotless A/B super compatibility already applied")
     raise SystemExit(0)
 
-original = """    if (!fs_mgr_update_logical_partition(&fstabEntry)) {
+
+def replace_exact(before: str, after: str, name: str) -> None:
+    global source
+    count = source.count(before)
+    if count != 1:
+        raise SystemExit(
+            f"ERROR: upstream AERA {name} changed (expected 1, got {count})"
+        )
+    source = source.replace(before, after, 1)
+
+
+replace_exact(
+    '''string TWPartitionManager::Get_Active_Slot_Suffix() {
+	if (Active_Slot_Display == "A")
+		return "_a";
+	return "_b";
+}''',
+    '''string TWPartitionManager::Get_Active_Slot_Suffix() {
+    // M55_SLOTLESS_SUPER_COMPAT
+    // Android A/B OTA support does not imply suffixed super partition names.
+    // This bootloader exports neither ro.boot.slot_suffix nor ro.boot.slot.
+    // Do not invent "_b" when its slot was never reported.
+    const std::string boot_slot = android::base::GetProperty(
+        "ro.boot.slot_suffix",
+        android::base::GetProperty("ro.boot.slot", ""));
+    if (boot_slot.empty()) {
+        return "";
+    }
+    return Active_Slot_Display == "A" ? "_a" : "_b";
+}''',
+    "Get_Active_Slot_Suffix",
+)
+
+replace_exact(
+    '''std::string TWPartitionManager::Get_Super_Partition() {
+	int slot_number = Get_Active_Slot_Display() == "A" ? 0 : 1;
+	std::string super_device = fs_mgr_get_super_partition_name(slot_number);
+	return "/dev/block/by-name/" + super_device;
+}''',
+    '''std::string TWPartitionManager::Get_Super_Partition() {
+    const std::string slot_suffix = Get_Active_Slot_Suffix();
+    const int slot_number = slot_suffix == "_b" ? 1 : 0;
+    const std::string preferred =
+        "/dev/block/by-name/" + fs_mgr_get_super_partition_name(slot_number);
+    if (access(preferred.c_str(), F_OK) == 0)
+        return preferred;
+    // Samsung's bootloader may not expose a boot slot, even when Android
+    // advertises A/B OTA support. Use the *existing* physical super node.
+    const std::string stock = "/dev/block/by-name/super";
+    if (slot_suffix.empty() && access(stock.c_str(), F_OK) == 0)
+        return stock;
+    return preferred;
+}''',
+    "Get_Super_Partition",
+)
+
+replace_exact(
+    '''#ifdef AB_OTA_UPDATER
+	blk_device_partition = bare_partition_name + PartitionManager.Get_Active_Slot_Suffix();
+#else
+	blk_device_partition = bare_partition_name;
+#endif''',
+    '''#ifdef AB_OTA_UPDATER
+    // An empty boot slot suffix is legitimate on the m55xq. The A/B
+    // build flag remains enabled; only logical lookup avoids inventing B.
+    blk_device_partition = bare_partition_name + Get_Active_Slot_Suffix();
+#else
+    blk_device_partition = bare_partition_name;
+#endif''',
+    "Prepare_Super_Volume",
+)
+
+replace_exact(
+    '''    if (!fs_mgr_update_logical_partition(&fstabEntry)) {
         LOGINFO("unable to update logical partition: %s\\n", twrpPart->Get_Mount_Point().c_str());
         return false;
-    }
-"""
-replacement = """    if (!fs_mgr_update_logical_partition(&fstabEntry)) {
-        // M55_PREMAPPED_SUPER_RECOVERY
-        // Init/recovery already mapped all six logical partitions. Android
-        // 16 libfs_mgr may refuse the duplicate CreateLogicalPartition()
-        // request even though the existing mapper device is usable.
-        // Never modify Super metadata or fabricate a block device.
-        const std::string already_mapped = "/dev/block/mapper/" + blk_device_partition;
-        struct stat mapper_stat = {};
-        if (stat(already_mapped.c_str(), &mapper_stat) == 0 &&
-            S_ISBLK(mapper_stat.st_mode)) {
-            fstabEntry.blk_device = already_mapped;
-            LOGINFO("M55: reusing already mapped logical partition %s -> %s\\n",
-                    bare_partition_name.c_str(), already_mapped.c_str());
+    }''',
+    '''    if (!fs_mgr_update_logical_partition(&fstabEntry)) {
+        // Tolerate an existing mapper for partitions prepared earlier in
+        // recovery, but never accept paths that are not block devices.
+        const std::string mapped = "/dev/block/mapper/" + blk_device_partition;
+        struct stat st = {};
+        if (stat(mapped.c_str(), &st) == 0 && S_ISBLK(st.st_mode)) {
+            fstabEntry.blk_device = mapped;
+            LOGINFO("M55: reusing mapped partition %s -> %s\\n",
+                    bare_partition_name.c_str(), mapped.c_str());
         } else {
             LOGINFO("unable to update logical partition: %s; "
                     "existing mapper device also unavailable\\n",
                     twrpPart->Get_Mount_Point().c_str());
             return false;
         }
-    }
-"""
-if source.count(original) != 1:
-    raise SystemExit(f"Upstream AERA logical partition call changed; expected one site, got {source.count(original)}")
-target.write_text(source.replace(original, replacement, 1))
-print(f"Patched AERA pre-mapped super handling: {target}")
+    }''',
+    "existing mapper fallback",
+)
+
+target.write_text(source)
+print(f"Patched M55 slotless logical partitions (A/B retained): {target}")
