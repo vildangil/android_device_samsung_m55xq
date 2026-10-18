@@ -1,6 +1,10 @@
 name: Build AERA Recovery 16.0 (Galaxy M55)
 
 on:
+  # AERA commits never launch CI. To run one pinned build from this assistant,
+  # explicitly create a ci/aera-run-* branch at the FINAL tested device SHA.
+  # "create" is not a "push" build trigger; it only fires on a new branch.
+  create:
   workflow_dispatch:
     inputs:
       device_ref:
@@ -32,15 +36,17 @@ on:
 permissions:
   contents: read
 
-# AERA Android 16 Soong bootstrap is long-running. Do not SIGTERM the
-# previous build when another workflow_dispatch is triggered.
+# Keep only one deliberately launched AERA build active; never cancel it
+# because of an unrelated tree change or GitHub push.
 concurrency:
-  group: m55xq-aera-${{ github.ref }}-${{ inputs.device_ref }}
+  group: m55xq-aera-manual
   cancel-in-progress: false
 
 jobs:
   recovery:
     name: AERA 16.0 / m55xq (experimental)
+    # No build from automatic source pushes, ordinary branch creation, or PRs.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'create' && github.event.ref_type == 'branch' && startsWith(github.event.ref, 'ci/aera-run-')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     env:
@@ -50,8 +56,8 @@ jobs:
       # Limit Go/Soong bootstrap parallelism on 15.6 GiB hosted runners.
       GOMAXPROCS: "2"
       TG_RECIPENT: ${{ inputs.TG_RECIPENT }}
-      TG_VERBOSE: ${{ inputs.VERBOSE }}
-      TG_UPLOAD: ${{ inputs.TG_UPLOAD }}
+      TG_VERBOSE: ${{ github.event_name == 'create' || inputs.VERBOSE }}
+      TG_UPLOAD: ${{ github.event_name == 'create' || inputs.TG_UPLOAD }}
       RUN_NUM: ${{ github.run_number }}_${{ github.run_attempt }}
 
     steps:
@@ -80,7 +86,7 @@ jobs:
       - name: Check out selected experimental device tree
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.device_ref }}
+          ref: ${{ github.event_name == 'create' && github.event.ref || inputs.device_ref }}
           path: device_tree
           persist-credentials: false
 
@@ -88,7 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ inputs.device_ref }}" != "port/aera-16.0-m55xq" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.device_ref }}" != "port/aera-16.0-m55xq" ]]; then
             echo "::error::AERA bring-up must use its isolated port/aera-16.0-m55xq branch."
             exit 1
           fi
@@ -349,7 +355,7 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           cp "$image" "$GITHUB_WORKSPACE/artifacts/recovery.img"
-          printf 'AERA Android 16 / Samsung m55xq / EXPERIMENTAL\nDevice tree: %s\nDevice SHA: %s\n' "${{ inputs.device_ref }}" "$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse HEAD)" > "$GITHUB_WORKSPACE/artifacts/BUILD_INFO.txt"
+          printf 'AERA Android 16 / Samsung m55xq / EXPERIMENTAL\nDevice tree: %s\nDevice SHA: %s\n' "${{ github.event_name == 'create' && github.event.ref || inputs.device_ref }}" "$(git -C "$GITHUB_WORKSPACE/device_tree" rev-parse HEAD)" > "$GITHUB_WORKSPACE/artifacts/BUILD_INFO.txt"
           cd "$GITHUB_WORKSPACE/artifacts"
           tar -cf aera-m55xq-odin.tar recovery.img
           sha256sum recovery.img aera-m55xq-odin.tar > SHA256SUMS
@@ -378,7 +384,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Telegram - upload AERA Odin TAR and SHA256SUMS
-        if: ${{ success() && inputs.TG_UPLOAD }}
+        if: ${{ success() && (github.event_name == 'create' || inputs.TG_UPLOAD) }}
         shell: bash
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
