@@ -193,6 +193,45 @@ jobs:
           echo "AERA build parallelism: 2 (memory-conservative)"
           echo "Actions run: $GITHUB_RUN_ID, attempt: $GITHUB_RUN_ATTEMPT"
 
+      - name: Configure disk-safe swap for Android 16 Soong
+        shell: bash
+        run: |
+          set -euo pipefail
+          free -h
+          df -h "$RUNNER_TEMP"
+          echo "vm.swappiness=$(cat /proc/sys/vm/swappiness)"
+          avail_kb=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          avail_gib=$((avail_kb / 1024 / 1024))
+          # Keep a minimum of ~12-14 GiB for Soong/Ninja outputs.
+          # Disk is shared by checkout, the Android source tree, and swap.
+          if (( avail_gib >= 26 )); then
+            swap_mib=8192
+          elif (( avail_gib >= 17 )); then
+            swap_mib=4096
+          else
+            swap_mib=0
+          fi
+          if (( swap_mib == 0 )); then
+            echo "::warning::Only ${avail_gib} GiB free; not creating swap to avoid filling runner disk."
+          else
+            swapfile="$RUNNER_TEMP/aera-build.swap"
+            echo "Creating ${swap_mib} MiB swapfile ($avail_gib GiB disk free)"
+            if ! sudo fallocate -l "${swap_mib}M" "$swapfile"; then
+              sudo dd if=/dev/zero of="$swapfile" bs=1M count="$swap_mib" status=progress
+            fi
+            sudo chmod 600 "$swapfile"
+            sudo mkswap "$swapfile"
+            if sudo swapon "$swapfile"; then
+              echo "Swap enabled to reduce risk of OOM during Soong bootstrap"
+              sudo sysctl -w vm.swappiness=15 || true
+            else
+              echo "::warning::swapon rejected by the runner; continuing without swap."
+              sudo rm -f "$swapfile"
+            fi
+          fi
+          free -h
+          df -h "$RUNNER_TEMP"
+
       - name: Build AERA recovery.img
         id: compile
         shell: bash
@@ -200,6 +239,30 @@ jobs:
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/aera"
           export LC_ALL=C
+          # Go/Soong may allocate >16 GiB before Ninja starts.
+          # Bound Go's live heap target while allowing external compile tools.
+          export GOMEMLIMIT=10GiB
+          monitor_pid=""
+          cleanup_monitor() {
+            if [[ -n "$monitor_pid" ]]; then
+              kill "$monitor_pid" 2>/dev/null || true
+              wait "$monitor_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_monitor EXIT
+          (
+            while sleep 90; do
+              echo "::notice::AERA heartbeat $(date -u '+%Y-%m-%d %H:%M:%S UTC') (Soong may be silent while generating build graph)"
+              free -h
+              df -h /
+              echo "Top processes by resident memory (KiB):"
+              ps -eo pid,rss,etime,comm --sort=-rss | head -n 12
+              if [[ -r /proc/pressure/memory ]]; then
+                cat /proc/pressure/memory
+              fi
+            done
+          ) 2>&1 | tee -a "$RUNNER_TEMP/aera-resources.log" &
+          monitor_pid=$!
           {
             set +e
             source build/envsetup.sh
@@ -210,8 +273,8 @@ jobs:
               echo "::error::AERA lunch did not select Galaxy M55"
               exit 1
             fi
-            # Soong bootstrap requires ~16 GiB on AERA A16. The hosted
-            # runner exposes ~15.6 GiB; -j2 reduces peak memory pressure.
+            # AERA A16 Soong bootstrap needs nearly all hosted-runner RAM;
+            # disk-safe swap is enabled above if enough storage is free.
             mka -j2 adbd recoveryimage
           } 2>&1 | tee "$RUNNER_TEMP/aera-build.log"
 
@@ -253,6 +316,7 @@ jobs:
             ${{ runner.temp }}/aera-sync.log
             ${{ runner.temp }}/aera-build.log
             aera/out/verbose.log.gz
+            ${{ runner.temp }}/aera-resources.log
           retention-days: 7
           if-no-files-found: warn
 
