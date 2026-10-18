@@ -67,15 +67,18 @@ finish() {
 : > "$LOG"
 say "Waiting for TWRP-created logical system and vendor devices"
 i=0
-while [ "$i" -lt 40 ]; do
+# TWRP creates these mappings immediately after it starts, while the
+# KeyMint TEE itself needs almost one second to initialize on this SoC.
+# Poll frequently to give KeyMint time before TWRP's first metadata unwrap.
+while [ "$i" -lt 200 ]; do
     if [ -b "$SYSD" ] && [ -b "$VEND" ]; then
         break
     fi
     i=$((i + 1))
-    /system/bin/sleep 1
+    /system/bin/sleep 0.2
 done
 if [ ! -b "$SYSD" ] || [ ! -b "$VEND" ]; then
-    say "Could not find both system/vendor logical block devices after 40 s"
+    say "Could not find both system/vendor logical block devices (40 s timeout)"
     finish fallback
     exit 1
 fi
