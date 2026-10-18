@@ -194,6 +194,18 @@ jobs:
           python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_aera_secrets_link.py"
           grep -n -F 'aera_secrets/aera_secrets.cpp' bootable/recovery/Android.mk
 
+      - name: Reuse existing Samsung Super logical mappings
+        shell: bash
+        run: |
+          set -euo pipefail
+          # AERA CreateLogicalPartitions() already maps all six dm devices,
+          # then fs_mgr_update_logical_partition() attempts to recreate them.
+          # Verify and reuse an existing mapper block device when appropriate.
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_premapped_super.py" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
+          grep -q 'M55_PREMAPPED_SUPER_RECOVERY' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
+
       - name: Install M55 AERA device tree
         shell: bash
         run: |
