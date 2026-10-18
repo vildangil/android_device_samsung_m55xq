@@ -37,9 +37,10 @@ scale. This branch implements read-only **runtime stock patch detection**.
   `ro.build.version.release` / `ro.build.version.security_patch`
   and `ro.vendor.build.security_patch`.
 - It separately inspects the **stock /boot** Android boot image header
-  (read-only, signature `ANDROID!`, packed `os_version` field at byte
-  offset 44, header v0-v2) to derive a boot patch month formatted
-  `YYYY-MM-01`. Only if that check passes it additionally sets
+  (read-only, signature `ANDROID!`, version field at byte 40):
+  packed `os_version` is at byte 44 for headers v0-v2 and byte 16
+  for Android/GKI headers v3-v4. The patch month is formatted
+  `YYYY-MM-01`. Only if this check passes does the script set
   `ro.bootimage.build.version.security_patch`.
 - It validates the dates, updates the live props with resetprop
   **before** the KeyMint TEE service is started, then starts that
@@ -58,9 +59,9 @@ If that happens, the helper may resolve the correct SPLs while the
 initial automatic decrypt attempt has already failed. Examine the
 TWRP and logcat timelines before attempting any change to FBE logic.
 The boot key patch may still differ from all reported properties.
-The optional Android boot-header parser supports **v0-v2 only**;
-if unsupported, missing or inconsistent, the boot patch is not
-guessed. Verify the KeyMint trace; do not infer that matching system
+The Android boot-header parser now supports **v0-v4**.
+If the header is unsupported, missing or inconsistent, the boot patch
+is not guessed. Verify the KeyMint trace; do not infer that matching system
 and vendor properties always fixes boot patch-level mismatches.
 
 The detector does NOT alter the built-in BoardConfig December 2025
@@ -103,3 +104,40 @@ read; it is not success for a May 2026 device.
 
 **Never** format /data, wipe /metadata, reset Gatekeeper/Weaver slots or
 modify EFS as part of this experiment.
+
+## F55 October 18 test: root cause of missing prompt in auto-SPL v1
+
+The tester's logcat showed the previous detection mode and OS/vendor
+props already correct, but Samsung KeyMint still rejected the metadata
+key because the **boot** patch remained on December 2025:
+
+```text
+swd_configure: os_patchlevel       : 202605
+swd_configure: vendor_patchlevel   : 20260505
+swd_configure: boot_patchlevel     : 20251201
+km_check_key_os_version_patchlevels: key_boot_patchlevel(20260501)
+                                      > vl->boot_patchlevel(20251201)
+keystore2: Error::Km(ErrorCode(-33))
+```
+
+Kernel dmesg also recorded: `Stock boot image SPL unknown; leaving
+bootimage property unchanged`.
+
+**Fix:** the earlier parser always used the **old v0-v2 offset 44**.
+Android 16/GKI v3-v4 images use **offset 16**. The updated
+`read_boot_spl` inspects header version at offset 40 and selects the
+appropriate offset before launching KeyMint. This is a distinct
+code-level fix, not a per-firmware SPL hardcode. Actual boot header
+version on this F55 has not yet been read from the physical partition;
+the change is **not yet hardware-tested**.
+
+Read-only on-device header inspection, if still needed:
+
+```bat
+adb shell "od -An -tu4 -j40 -N4 /dev/block/bootdevice/by-name/boot"
+adb shell "od -An -tu4 -j16 -N4 /dev/block/bootdevice/by-name/boot"
+adb shell "od -An -tu4 -j44 -N4 /dev/block/bootdevice/by-name/boot"
+adb shell cat /tmp/twrp-keymint-spl.log
+```
+
+No format, metadata wipe or keyblob changes are required.
