@@ -256,7 +256,7 @@ jobs:
               free -h
               df -h /
               echo "Top processes by resident memory (KiB):"
-              ps -eo pid,rss,etime,comm --sort=-rss | head -n 12
+              ps -eo pid,rss,etime,comm --sort=-rss | head -n 12 || true
               if [[ -r /proc/pressure/memory ]]; then
                 cat /proc/pressure/memory
               fi
