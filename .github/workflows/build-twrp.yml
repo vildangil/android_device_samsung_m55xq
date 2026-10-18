@@ -240,6 +240,19 @@ jobs:
               }
           done
 
+      - name: M55 auto-SPL predecrypt synchronization
+        if: ${{ inputs.tree_ref == 'test/twrp-auto-spl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # TWRP maps logical system/vendor in Setup_Fstab_Partitions and
+          # immediately tries metadata decryption. The separate init auto-SPL
+          # worker otherwise races that attempt and starts KeyMint too late.
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/twrp/wait_for_auto_spl.py" \
+            "$GITHUB_WORKSPACE/twrp/bootable/recovery/partitionmanager.cpp"
+          grep -q 'M55_AUTO_SPL_PREDECRYPT_WAIT' \
+            "$GITHUB_WORKSPACE/twrp/bootable/recovery/partitionmanager.cpp"
+
       - name: Telegram - device info and compilation
         shell: bash
         env:
