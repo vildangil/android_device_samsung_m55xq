@@ -77,43 +77,57 @@ def main() -> int:
         shutil.copy2(candidate, staged)
         digest = hashlib.sha256(staged.read_bytes()).hexdigest()
         print(f"staged AOSP VNDK32 {name}: sha256={digest}", flush=True)
-    # Samsung's libskeymint_cli.so also uses BoringSSL's legacy sk_delete
-    # export. Android 16's platform libcrypto no longer exposes it. Stage a
-    # matching Android 12L libcrypto in a PRIVATE KeyMint search directory,
-    # rather than replacing platform-wide /system/lib64/libcrypto.so.
-    libcrypto = source / "libcrypto.so"
-    if not libcrypto.is_file():
-        parser.error(f"missing VNDK32 BoringSSL: {libcrypto}")
-    cryptodyn = subprocess.run(
-        ["readelf", "-W", "--dyn-syms", str(libcrypto)],
+    # Android 12L's libcrypto fixes Samsung's sk_delete but breaks Android 16's
+    # libkeymaster_portable (OPENSSL_sk_new_null). NEVER override libcrypto.
+    # Instead preload one tiny arm64 ABI trampoline into KeyMint alone.
+    clang_candidates = sorted(
+        (args.source_root / "prebuilts/clang/host/linux-x86").glob(
+            "clang-r*/bin/clang"
+        )
+    )
+    if not clang_candidates:
+        parser.error("Android clang missing; cannot build KeyMint ABI shim")
+    compat_dir = destination / "keymint-compat"
+    compat_dir.mkdir(parents=True, exist_ok=True)
+    source_file = compat_dir / "m55_keymint_compat.c"
+    source_file.write_text(
+        "#include <stddef.h>\\n"
+        "extern void *OPENSSL_sk_delete(void *, size_t);\\n"
+        "__attribute__((visibility(\\\"default\\\"))) "
+        "void *sk_delete(void *stack, size_t index) { "
+        "return OPENSSL_sk_delete(stack, index); }\\n"
+    )
+    compat = compat_dir / "libm55_keymint_compat.so"
+    subprocess.run(
+        [
+            str(clang_candidates[-1]),
+            "--target=aarch64-linux-android30",
+            "-fPIC", "-shared", "-nostdlib", "-fuse-ld=lld",
+            "-Wl,-soname,libm55_keymint_compat.so",
+            "-o", str(compat), str(source_file),
+        ],
+        check=True,
+    )
+    symbols = subprocess.run(
+        ["readelf", "-W", "--dyn-syms", str(compat)],
         check=True, capture_output=True, text=True,
     ).stdout
-    defined_sk_delete = any(
-        len(fields := line.split()) >= 8
-        and fields[6] != "UND"
-        and fields[7].split("@")[0] == "sk_delete"
-        for line in cryptodyn.splitlines()
-    )
-    if not defined_sk_delete:
-        parser.error(
-            "VNDK32 libcrypto does not export sk_delete; "
-            "do not install a mismatched crypto library"
-        )
-    if libcrypto.read_bytes()[:6] != bytes.fromhex("7f454c460201"):
-        parser.error("VNDK32 libcrypto is not 64-bit little-endian ELF")
-    compat = args.device_tree / (
-        "recovery/root/system/lib64/keymint-compat/libcrypto.so"
-    )
-    compat.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(libcrypto, compat)
+    if not any(
+        (cols := row.split()) and len(cols) > 7 and cols[6] != "UND"
+        and cols[7] == "sk_delete"
+        for row in symbols.splitlines()
+    ):
+        parser.error("KeyMint shim has no exported sk_delete")
+    if compat.read_bytes()[:6] != bytes.fromhex("7f454c460201"):
+        parser.error("KeyMint shim has invalid ELF64 header")
     print(
-        f"staged private KeyMint legacy libcrypto.so (sk_delete): "
+        "staged private M55 sk_delete shim; Android 16 libcrypto untouched: "
         f"sha256={hashlib.sha256(compat.read_bytes()).hexdigest()}",
         flush=True,
     )
 
     print(
-        "Legacy Samsung KeyMint dependency staged without patching binaries. "
+        "Legacy Samsung KeyMint ABI shim staged without replacing platform libcrypto. "
         "Full FBE/Keystore2/Hermes functionality still requires on-device testing.",
         flush=True,
     )
