@@ -62,8 +62,8 @@ for name in ("rb_bootloader", "rb_poweroff", "rb_download", "rb_edl", "rb_fastbo
 # AERA's pre-reboot AVB hook may block when Samsung's encrypted /data is
 # unavailable. A cold bring-up must still be able to leave recovery safely.
 replace_once(
-    "\\tTWFunc::Run_Before_Reboot();",
-    '''    if (android::base::GetProperty("ro.product.device", "") == "m55xq"
+    "TWFunc::Run_Before_Reboot();",
+    '''if (android::base::GetProperty("ro.product.device", "") == "m55xq"
         && !PartitionManager.Is_Mounted_By_Path("/data")) {
         LOGINFO("M55: /data unavailable; skip pre-reboot AVB/settings hooks\\n");
     } else {
@@ -78,7 +78,9 @@ replace_once(
 # This never writes to boot partitions, EFS, userdata, or the misc BCB directly.
 replace_once(
     "#include <sys/reboot.h>",
-    "#include <sys/reboot.h>\\n#include <linux/reboot.h>\\n#include <sys/syscall.h>",
+    '''#include <sys/reboot.h>
+#include <linux/reboot.h>
+#include <sys/syscall.h>''',
     "kernel reboot syscall includes",
 )
 replace_once(
