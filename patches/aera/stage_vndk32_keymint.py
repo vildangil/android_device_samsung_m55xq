@@ -90,13 +90,13 @@ def main() -> int:
     compat_dir = destination / "keymint-compat"
     compat_dir.mkdir(parents=True, exist_ok=True)
     source_file = compat_dir / "m55_keymint_compat.c"
-    source_file.write_text(
-        "#include <stddef.h>\\n"
-        "extern void *OPENSSL_sk_delete(void *, size_t);\\n"
-        "__attribute__((visibility(\\\"default\\\"))) "
-        "void *sk_delete(void *stack, size_t index) { "
-        "return OPENSSL_sk_delete(stack, index); }\\n"
-    )
+    source_file.write_text("""#include <stddef.h>
+extern void *OPENSSL_sk_delete(void *, size_t);
+__attribute__((visibility("default")))
+void *sk_delete(void *stack, size_t index) {
+    return OPENSSL_sk_delete(stack, index);
+}
+""")
     compat = compat_dir / "libm55_keymint_compat.so"
     subprocess.run(
         [
