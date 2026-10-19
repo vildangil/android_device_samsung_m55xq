@@ -90,13 +90,85 @@ def main() -> int:
     compat_dir = destination / "keymint-compat"
     compat_dir.mkdir(parents=True, exist_ok=True)
     source_file = compat_dir / "m55_keymint_compat.c"
-    source_file.write_text("""#include <stddef.h>
-extern void *OPENSSL_sk_delete(void *, size_t);
-__attribute__((visibility("default")))
-void *sk_delete(void *stack, size_t index) {
-    return OPENSSL_sk_delete(stack, index);
-}
-""")
+    # Inspect the proprietary Samsung ELF instead of discovering one missing
+    # historical sk_* export per hour-long recovery build.
+    vendor_cli = args.device_tree / "recovery/root/vendor/lib64/libskeymint_cli.so"
+    if not vendor_cli.is_file():
+        parser.error(f"missing Samsung KeyMint client library: {vendor_cli}")
+    vendor_symbols = subprocess.run(
+        ["readelf", "-W", "--dyn-syms", str(vendor_cli)],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    required_stack_symbols = sorted({
+        cols[7].split("@")[0]
+        for row in vendor_symbols.splitlines()
+        if len(cols := row.split()) >= 8 and cols[6] == "UND"
+        and cols[7].startswith("sk_")
+    })
+    # Use the Android 16 BoringSSL OPENSSL_sk_* implementation, preserving
+    # the modern libcrypto needed by libkeymaster_portable.
+    compatible = {
+        "sk_delete": ('void *sk_delete(void *s, size_t i)', 'return OPENSSL_sk_delete(s,i);',
+                      'extern void *OPENSSL_sk_delete(void *, size_t);'),
+        "sk_dup": ('void *sk_dup(const void *s)', 'return OPENSSL_sk_dup(s);',
+                   'extern void *OPENSSL_sk_dup(const void *);'),
+        "sk_num": ('size_t sk_num(const void *s)', 'return OPENSSL_sk_num(s);',
+                   'extern size_t OPENSSL_sk_num(const void *);'),
+        "sk_value": ('void *sk_value(const void *s, size_t i)', 'return OPENSSL_sk_value(s,i);',
+                     'extern void *OPENSSL_sk_value(const void *, size_t);'),
+        "sk_free": ('void sk_free(void *s)', 'OPENSSL_sk_free(s);',
+                    'extern void OPENSSL_sk_free(void *);'),
+        "sk_pop": ('void *sk_pop(void *s)', 'return OPENSSL_sk_pop(s);',
+                   'extern void *OPENSSL_sk_pop(void *);'),
+        "sk_push": ('int sk_push(void *s, void *p)', 'return OPENSSL_sk_push(s,p);',
+                    'extern int OPENSSL_sk_push(void *, void *);'),
+        "sk_new_null": ('void *sk_new_null(void)', 'return OPENSSL_sk_new_null();',
+                        'extern void *OPENSSL_sk_new_null(void);'),
+        "sk_delete_ptr": ('void *sk_delete_ptr(void *s, const void *p)',
+                          'return OPENSSL_sk_delete_ptr(s,p);',
+                          'extern void *OPENSSL_sk_delete_ptr(void *, const void *);'),
+        "sk_shift": ('void *sk_shift(void *s)', 'return OPENSSL_sk_shift(s);',
+                     'extern void *OPENSSL_sk_shift(void *);'),
+        "sk_zero": ('void sk_zero(void *s)', 'OPENSSL_sk_zero(s);',
+                    'extern void OPENSSL_sk_zero(void *);'),
+        "sk_sort": ('void sk_sort(void *s)', 'OPENSSL_sk_sort(s);',
+                    'extern void OPENSSL_sk_sort(void *);'),
+        "sk_set": ('void *sk_set(void *s, size_t i, void *p)',
+                   'return OPENSSL_sk_set(s,i,p);',
+                   'extern void *OPENSSL_sk_set(void *, size_t, void *);'),
+        "sk_insert": ('int sk_insert(void *s, void *p, size_t i)',
+                      'return OPENSSL_sk_insert(s,p,i);',
+                      'extern int OPENSSL_sk_insert(void *, void *, size_t);'),
+        "sk_pop_free": ('void sk_pop_free(void *s, void (*f)(void *))',
+                        'OPENSSL_sk_pop_free(s,f);',
+                        'extern void OPENSSL_sk_pop_free(void *, void (*)(void *));'),
+        "sk_new": ('void *sk_new(int (*f)(const void *, const void *))',
+                   'return OPENSSL_sk_new(f);',
+                   'extern void *OPENSSL_sk_new(int (*)(const void *, const void *));'),
+        "sk_find": ('int sk_find(const void *s, size_t *i, const void *p)',
+                    'return OPENSSL_sk_find(s,i,p);',
+                    'extern int OPENSSL_sk_find(const void *, size_t *, const void *);'),
+    }
+    unknown = set(required_stack_symbols) - set(compatible)
+    if unknown:
+        parser.error(
+            "unsupported Samsung KeyMint legacy stack exports: "
+            + ", ".join(sorted(unknown))
+        )
+    if not required_stack_symbols:
+        parser.error("expected Samsung legacy sk_* imports but none were found")
+    definitions = [compatible[name] for name in required_stack_symbols]
+    source_file.write_text(
+        "#include <stddef.h>\n"
+        + "\n".join(entry[2] for entry in definitions)
+        + "\n"
+        + "\n".join(
+            '__attribute__((visibility("default"))) '
+            + entry[0] + ' { ' + entry[1] + ' }'
+            for entry in definitions
+        ) + "\n"
+    )
+    print("Samsung KeyMint required sk_* exports:", required_stack_symbols, flush=True)
     compat = compat_dir / "libm55_keymint_compat.so"
     subprocess.run(
         [
@@ -112,12 +184,15 @@ void *sk_delete(void *stack, size_t index) {
         ["readelf", "-W", "--dyn-syms", str(compat)],
         check=True, capture_output=True, text=True,
     ).stdout
-    if not any(
-        (cols := row.split()) and len(cols) > 7 and cols[6] != "UND"
-        and cols[7] == "sk_delete"
+    exported_stack_symbols = {
+        cols[7].split("@")[0]
         for row in symbols.splitlines()
-    ):
-        parser.error("KeyMint shim has no exported sk_delete")
+        if len(cols := row.split()) >= 8 and cols[6] != "UND"
+        and cols[7].startswith("sk_")
+    }
+    missing = set(required_stack_symbols) - exported_stack_symbols
+    if missing:
+        parser.error("KeyMint shim missing exports: " + ", ".join(sorted(missing)))
     if compat.read_bytes()[:6] != bytes.fromhex("7f454c460201"):
         parser.error("KeyMint shim has invalid ELF64 header")
     print(
