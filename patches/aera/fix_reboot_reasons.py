@@ -77,10 +77,11 @@ replace_once(
 # first, then fall back to the kernel reboot syscall with an EXPLICIT reason.
 # This never writes to boot partitions, EFS, userdata, or the misc BCB directly.
 replace_once(
-    "#include <sys/reboot.h>",
+    "#include <sys/reboot.h>\\n#include <sys/sendfile.h>",
     '''#include <sys/reboot.h>
 #include <linux/reboot.h>
-#include <sys/syscall.h>''',
+#include <sys/syscall.h>
+#include <sys/sendfile.h>''',
     "kernel reboot syscall includes",
 )
 replace_once(
