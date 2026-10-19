@@ -196,7 +196,7 @@ def main() -> int:
     if compat.read_bytes()[:6] != bytes.fromhex("7f454c460201"):
         parser.error("KeyMint shim has invalid ELF64 header")
     print(
-        "staged private M55 sk_delete shim; Android 16 libcrypto untouched: "
+        "staged private Samsung KeyMint stack ABI shim; Android 16 libcrypto untouched: "
         f"sha256={hashlib.sha256(compat.read_bytes()).hexdigest()}",
         flush=True,
     )
