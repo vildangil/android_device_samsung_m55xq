@@ -218,6 +218,12 @@ jobs:
             "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp-functions.cpp"
           grep -q 'M55_EXPLICIT_NORMAL_REBOOT' \
             "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp-functions.cpp"
+          grep -q 'M55_PMIC_RESET_FALLBACK' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp-functions.cpp"
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/skip_failed_keymint_decrypt.py" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp.cpp"
+          grep -q 'M55_GUARD_BROKEN_KEYMINT_DECRYPT' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp.cpp"
 
       - name: Install M55 AERA device tree
         shell: bash
@@ -241,6 +247,8 @@ jobs:
           python3 "$tree/patches/aera/stage_vndk32_keymint.py" \
             "$GITHUB_WORKSPACE/aera" "$tree"
           test -s "$tree/recovery/root/system/lib64/android.hardware.security.keymint-V1-ndk_platform.so"
+          test -s "$tree/recovery/root/system/lib64/keymint-compat/libm55_keymint_compat.so"
+          test ! -e "$tree/recovery/root/system/lib64/keymint-compat/libcrypto.so"
       - name: Telegram - compiling AERA recovery
         shell: bash
         env:
