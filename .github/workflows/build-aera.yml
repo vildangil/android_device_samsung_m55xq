@@ -133,6 +133,32 @@ jobs:
           test -s "$tree/patches/aera/fix_aera_secrets_link.py"
           echo "M55 Hermes, FBE and KeyMint source preflight passed"
 
+      - name: Preflight AERA C++ patch anchors before costly repo sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree="$GITHUB_WORKSPACE/device_tree"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          # Detect upstream C++ drift before spending 15+ minutes syncing.
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/twrp-functions.cpp" \
+            -o "$tmp/twrp-functions.cpp"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/twrp.cpp" \
+            -o "$tmp/twrp.cpp"
+          python3 -m py_compile \
+            "$tree/patches/aera/fix_reboot_reasons.py" \
+            "$tree/patches/aera/skip_failed_keymint_decrypt.py" \
+            "$tree/patches/aera/stage_vndk32_keymint.py"
+          python3 "$tree/patches/aera/fix_reboot_reasons.py" \
+            "$tmp/twrp-functions.cpp"
+          python3 "$tree/patches/aera/skip_failed_keymint_decrypt.py" \
+            "$tmp/twrp.cpp"
+          grep -q 'M55_PMIC_RESET_FALLBACK' "$tmp/twrp-functions.cpp"
+          grep -q 'M55_GUARD_BROKEN_KEYMINT_DECRYPT' "$tmp/twrp.cpp"
+          echo "Upstream AERA patch preflight passed before full source sync"
+
       - name: Reclaim runner disk
         shell: bash
         run: |
