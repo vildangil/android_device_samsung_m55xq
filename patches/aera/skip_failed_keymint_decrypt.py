@@ -26,9 +26,16 @@ new = """    // M55_GUARD_BROKEN_KEYMINT_DECRYPT: never block the entire recover
     const bool m55 = android::base::GetProperty("ro.product.device", "") == "m55xq";
     const std::string keymint_state =
         android::base::GetProperty("init.svc.vendor.keymint-default", "");
-    const bool m55_skip_failed_hal = m55 && keymint_state != "running";
-    LOGINFO("M55 recovery: entering decryption phase; KeyMint=%s, skip=%d\\n",
-            keymint_state.c_str(), static_cast<int>(skip_decryption || m55_skip_failed_hal));
+    const std::string qsee_state =
+        android::base::GetProperty("init.svc.qseecom-service", "");
+    const std::string qtee_state =
+        android::base::GetProperty("init.svc.qteeconnector-hal-1-0", "");
+    const bool m55_skip_failed_hal = m55 &&
+        (keymint_state != "running" || qsee_state != "running" ||
+         qtee_state != "running");
+    LOGINFO("M55 recovery: crypto services KeyMint=%s QSEE=%s QTEE=%s; skip=%d\\n",
+            keymint_state.c_str(), qsee_state.c_str(), qtee_state.c_str(),
+            static_cast<int>(skip_decryption || m55_skip_failed_hal));
     Decrypt_Page(skip_decryption || m55_skip_failed_hal, datamedia);
     LOGINFO("M55 recovery: decryption phase returned; continue UI startup\\n");"""
 s = s.replace(old, new, 1)
