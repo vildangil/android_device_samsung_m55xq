@@ -85,9 +85,10 @@ on post-fs-data
     mkdir /data/vendor/keymaster 0775 root root
 
 service vendor.keymint-default /system/bin/android.hardware.security.keymint-service
-    # Only Samsung KeyMint sees the isolated Android 12L BoringSSL ABI.
-    # Do not replace Android 16 libcrypto globally for recovery/keystore2.
-    setenv LD_LIBRARY_PATH /system/lib64/keymint-compat:/vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
+    # Keep Android 16 libcrypto for libkeymaster_portable; preload only
+    # Samsung's missing Android 12L sk_delete ABI trampoline.
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
+    setenv LD_PRELOAD /system/lib64/keymint-compat/libm55_keymint_compat.so
     user root
     group root drmrpc
     seclabel u:r:recovery:s0
