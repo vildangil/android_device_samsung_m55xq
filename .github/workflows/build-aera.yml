@@ -147,14 +147,22 @@ jobs:
           curl --fail --location --silent --show-error --retry 3 \
             "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/twrp.cpp" \
             -o "$tmp/twrp.cpp"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/partitionmanager.cpp" \
+            -o "$tmp/partitionmanager.cpp"
           python3 -m py_compile \
             "$tree/patches/aera/fix_reboot_reasons.py" \
             "$tree/patches/aera/skip_failed_keymint_decrypt.py" \
+            "$tree/patches/aera/fix_early_boot_fbe.py" \
             "$tree/patches/aera/stage_vndk32_keymint.py"
           python3 "$tree/patches/aera/fix_reboot_reasons.py" \
             "$tmp/twrp-functions.cpp"
           python3 "$tree/patches/aera/skip_failed_keymint_decrypt.py" \
             "$tmp/twrp.cpp"
+          python3 "$tree/patches/aera/fix_early_boot_fbe.py" \
+            "$tmp/partitionmanager.cpp" "$tmp/twrp.cpp"
+          grep -q 'M55_EARLY_KEYMINT_FBE_GUARD' "$tmp/partitionmanager.cpp"
+          grep -q 'M55_EARLY_BCB_CLEAR' "$tmp/twrp.cpp"
           grep -q 'M55_PMIC_RESET_FALLBACK' "$tmp/twrp-functions.cpp"
           grep -q 'M55_GUARD_BROKEN_KEYMINT_DECRYPT' "$tmp/twrp.cpp"
           echo "Upstream AERA patch preflight passed before full source sync"
@@ -250,6 +258,11 @@ jobs:
             "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp.cpp"
           grep -q 'M55_GUARD_BROKEN_KEYMINT_DECRYPT' \
             "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp.cpp"
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_early_boot_fbe.py" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/twrp.cpp"
+          grep -q 'M55_EARLY_KEYMINT_FBE_GUARD' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/partitionmanager.cpp"
 
       - name: Install M55 AERA device tree
         shell: bash
