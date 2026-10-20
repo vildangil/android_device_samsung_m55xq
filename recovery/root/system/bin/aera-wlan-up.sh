@@ -9,9 +9,20 @@ mkdir -p /tmp/recovery /tmp/recovery/sockets /vendor_dlkm
 
 mount_ro_if_needed() {
     target="$1"
-    device="$2"
+    partition="$2"
     if grep -q " $target " /proc/mounts; then
         return 0
+    fi
+    device=""
+    for candidate in "/dev/block/mapper/$partition" "/dev/block/by-name/$partition" "/dev/block/bootdevice/by-name/$partition"; do
+        if [ -b "$candidate" ]; then
+            device="$candidate"
+            break
+        fi
+    done
+    if [ -z "$device" ]; then
+        log "no block device for $partition"
+        return 1
     fi
     for fs in erofs ext4 f2fs; do
         if mount -t "$fs" -o ro "$device" "$target" >> "$LOG" 2>&1; then
@@ -39,16 +50,16 @@ find_driver() {
 # The WLAN firmware config is in the stock vendor partition. Make it available
 # before the driver signals fs_ready and starts its firmware/QMI sequence.
 if [ ! -r /vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini ]; then
-    mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+    mount_ro_if_needed /vendor vendor || true
 fi
 
 driver="$(find_driver 2>/dev/null || true)"
 if [ -z "$driver" ]; then
-    mount_ro_if_needed /vendor_dlkm /dev/block/by-name/vendor_dlkm || true
+    mount_ro_if_needed /vendor_dlkm vendor_dlkm || true
     driver="$(find_driver 2>/dev/null || true)"
 fi
 if [ -z "$driver" ]; then
-    mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+    mount_ro_if_needed /vendor vendor || true
     driver="$(find_driver 2>/dev/null || true)"
 fi
 if [ -z "$driver" ]; then
@@ -95,13 +106,13 @@ log "set $ready to 1"
 # Wait for the firmware/QMI cold-start to publish wlan0 before starting
 # supplicant. Keep the UI informed with a clear log if the device never appears.
 attempt=0
-while [ "$attempt" -lt 20 ]; do
+while [ "$attempt" -lt 60 ]; do
     [ -d /sys/class/net/wlan0 ] && break
     sleep 1
     attempt=$((attempt + 1))
 done
 if [ ! -d /sys/class/net/wlan0 ]; then
-    log "ERROR: wlan0 did not appear within 20 seconds"
+    log "ERROR: wlan0 did not appear within 60 seconds"
     exit 1
 fi
 
