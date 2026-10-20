@@ -13,7 +13,7 @@ service aera-wlan-up /system/bin/sh /system/bin/aera-wlan-up.sh
     group root
     seclabel u:r:recovery:s0
 
-service wpa_supplicant /system/bin/hw/wpa_supplicant -Dnl80211 -iwlan0 -dd -O/tmp/recovery/sockets -c/tmp/wpa_supplicant.conf
+service wpa_supplicant /system/bin/wpa_supplicant -Dnl80211 -iwlan0 -dd -O/tmp/recovery/sockets -c/tmp/wpa_supplicant.conf
     disabled
     user root
     group root inet net_admin net_raw
