@@ -35,6 +35,7 @@ new_pm = """        DataManager::SetValue(TW_IS_ENCRYPTED, 1);
         std::string m55_keymint;
         std::string m55_qsee;
         std::string m55_qtee;
+        std::string m55_gatekeeper;
         bool m55_secure_ready = !m55_early_boot;
         // M55_EARLY_FBE_WAIT: give init time to mount vendor and bring up
         // qseecomd, QTEEConnector, QSEECom and KeyMint. A single property
@@ -48,9 +49,12 @@ new_pm = """        DataManager::SetValue(TW_IS_ENCRYPTED, 1);
                     android::base::GetProperty("init.svc.qseecom-service", "");
                 m55_qtee =
                     android::base::GetProperty("init.svc.qteeconnector-hal-1-0", "");
+                m55_gatekeeper =
+                    android::base::GetProperty("init.svc.gatekeeper-1-0", "");
                 if (m55_keymint == "running" &&
                     m55_qsee == "running" &&
-                    m55_qtee == "running") {
+                    m55_qtee == "running" &&
+                    m55_gatekeeper == "running") {
                     m55_secure_ready = true;
                     break;
                 }
@@ -58,9 +62,10 @@ new_pm = """        DataManager::SetValue(TW_IS_ENCRYPTED, 1);
             }
         }
         if (m55_early_boot && !m55_secure_ready) {
-            LOGINFO("M55 early FBE deferred after bounded wait (KeyMint=%s, QSEE=%s, QTEE=%s):"
+            LOGINFO("M55 early FBE deferred after bounded wait (KeyMint=%s, QSEE=%s, QTEE=%s, Gatekeeper=%s):"
                     " continue recovery UI with encrypted /data\\n",
-                    m55_keymint.c_str(), m55_qsee.c_str(), m55_qtee.c_str());
+                    m55_keymint.c_str(), m55_qsee.c_str(), m55_qtee.c_str(),
+                    m55_gatekeeper.c_str());
         } else {
             LOGINFO("M55 early FBE: secure services ready or non-M55; trying /data\\n");
             Decrypt_Data();
