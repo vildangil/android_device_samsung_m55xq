@@ -41,16 +41,20 @@ wait_service() {
 }
 
 # Recovery creates logical partition aliases after init has already started.
-attempt=0
-while [ "$attempt" -lt 25 ] && [ ! -b /dev/block/by-name/vendor ]; do
-    sleep 1
-    attempt=$((attempt + 1))
-done
-if [ ! -b /dev/block/by-name/vendor ]; then
-    log "WARNING: /dev/block/by-name/vendor not available yet"
+if grep -q " /vendor " /proc/mounts; then
+    log "/vendor already mounted"
 else
-    mkdir -p /vendor
-    mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+    attempt=0
+    while [ "$attempt" -lt 20 ] && [ ! -b /dev/block/by-name/vendor ]; do
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    if [ ! -b /dev/block/by-name/vendor ]; then
+        log "WARNING: /dev/block/by-name/vendor not available yet"
+    else
+        mkdir -p /vendor
+        mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+    fi
 fi
 
 # The stock vendor build.prop carries QTI KeyMint properties that are not in
@@ -77,7 +81,7 @@ fi
 
 # qseecomd needs the stock vendor libraries. The HAL service RCs are disabled
 # and started explicitly below so they cannot race the vendor mount.
- /system/bin/setprop ctl.start qseecomd
+/system/bin/setprop ctl.start qseecomd
 wait_service qseecomd 10 || exit 1
 
 /system/bin/setprop ctl.start qteeconnector-hal-1-0
