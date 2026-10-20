@@ -1,7 +1,5 @@
-on property:ro.crypto.state=encrypted && property:hwservicemanager.ready=true
-    start qteeconnector-hal-1-0
-
 service qteeconnector-hal-1-0 /vendor/bin/hw/vendor.qti.hardware.qteeconnector@1.0-service
+    disabled
     class early_hal
     user root
     group root
