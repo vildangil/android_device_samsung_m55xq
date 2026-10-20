@@ -42,19 +42,28 @@ wait_service() {
 }
 
 # Recovery creates logical partition aliases after init has already started.
+# Samsung slotless dynamic partitions may expose either a mapper or by-name node.
 if grep -q " /vendor " /proc/mounts; then
     log "/vendor already mounted"
 else
     attempt=0
-    while [ "$attempt" -lt 20 ] && [ ! -b /dev/block/by-name/vendor ]; do
+    vendor_block=""
+    while [ "$attempt" -lt 20 ]; do
+        for candidate in /dev/block/mapper/vendor /dev/block/by-name/vendor /dev/block/bootdevice/by-name/vendor; do
+            if [ -b "$candidate" ]; then
+                vendor_block="$candidate"
+                break
+            fi
+        done
+        [ -n "$vendor_block" ] && break
         sleep 1
         attempt=$((attempt + 1))
     done
-    if [ ! -b /dev/block/by-name/vendor ]; then
-        log "WARNING: /dev/block/by-name/vendor not available yet"
+    if [ -z "$vendor_block" ]; then
+        log "WARNING: vendor logical block device not available yet"
     else
         mkdir -p /vendor
-        mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+        mount_ro_if_needed /vendor "$vendor_block" || true
     fi
 fi
 
@@ -83,7 +92,12 @@ fi
 # qseecomd needs the stock vendor libraries. The HAL service RCs are disabled
 # and started explicitly below so they cannot race the vendor mount.
 /system/bin/setprop ctl.start qseecomd
-wait_service qseecomd 10 || exit 1
+# The common qcom_decrypt init service marks qseecomd oneshot. It may finish
+# after registering secure-storage listeners, so a stopped state alone must
+# not prevent the other HALs from starting.
+if ! wait_service qseecomd 10; then
+    log "qseecomd may have exited after listener setup; trying the HIDL services"
+fi
 
 /system/bin/setprop ctl.start qteeconnector-hal-1-0
 wait_service qteeconnector-hal-1-0 10 || exit 1
