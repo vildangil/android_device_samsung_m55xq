@@ -1,0 +1,20 @@
+# AERA Galaxy M55 recovery WLAN.
+# Bring up the stock Qualcomm driver only when the user enables Wi-Fi.
+on property:sys.aera.wlan.up=1
+    mkdir /tmp/recovery 0777 root root
+    mkdir /tmp/recovery/sockets 0777 root root
+    start aera-wlan-up
+    setprop sys.aera.wlan.up 0
+
+service aera-wlan-up /system/bin/sh /system/bin/aera-wlan-up.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+service wpa_supplicant /system/bin/hw/wpa_supplicant -Dnl80211 -iwlan0 -dd -O/tmp/recovery/sockets -c/vendor/etc/wifi/wpa_supplicant.conf
+    disabled
+    user root
+    group root inet net_admin net_raw
+    seclabel u:r:recovery:s0
