@@ -42,7 +42,7 @@ new_pm = """        DataManager::SetValue(TW_IS_ENCRYPTED, 1);
         // snapshot at Process_Fstab entry races these services on cold boot.
         // Keep the wait bounded: a broken HAL must not hang recovery forever.
         if (m55_early_boot) {
-            for (int m55_wait = 0; m55_wait < 75; ++m55_wait {
+            for (int m55_wait = 0; m55_wait < 75; ++m55_wait) {
                 m55_keymint =
                     android::base::GetProperty("init.svc.vendor.keymint-default", "");
                 m55_qsee =
