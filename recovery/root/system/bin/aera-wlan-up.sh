@@ -105,14 +105,20 @@ if [ ! -d /sys/class/net/wlan0 ]; then
     exit 1
 fi
 
-if [ ! -r /vendor/etc/wifi/wpa_supplicant.conf ]; then
-    mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+if [ ! -s /tmp/wpa_supplicant.conf ]; then
+    if [ -r /vendor/etc/wifi/wpa_supplicant.conf ]; then
+        cp /vendor/etc/wifi/wpa_supplicant.conf /tmp/wpa_supplicant.conf
+    else
+        cat > /tmp/wpa_supplicant.conf <<'EOF'
+ctrl_interface=/tmp/recovery/sockets
+update_config=1
+ap_scan=1
+fast_reauth=1
+pmf=1
+EOF
+    fi
 fi
-if [ ! -r /vendor/etc/wifi/wpa_supplicant.conf ]; then
-    log "ERROR: /vendor/etc/wifi/wpa_supplicant.conf is missing"
-    exit 1
-fi
-
+chmod 0600 /tmp/wpa_supplicant.conf
 chmod 0777 /tmp/recovery /tmp/recovery/sockets
 /system/bin/setprop ctl.start wpa_supplicant
 log "requested wpa_supplicant start"
