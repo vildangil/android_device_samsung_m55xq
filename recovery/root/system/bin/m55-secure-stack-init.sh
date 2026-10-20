@@ -91,8 +91,11 @@ wait_service qteeconnector-hal-1-0 10 || exit 1
 /system/bin/setprop ctl.start qseecom-service
 wait_service qseecom-service 10 || exit 1
 
+/system/bin/setprop ctl.start gatekeeper-1-0
+wait_service gatekeeper-1-0 10 || exit 1
+
 /system/bin/setprop ctl.start vendor.keymint-default
 wait_service vendor.keymint-default 10 || exit 1
 
-log "QSEECom, QTEEConnector and KeyMint are running"
+log "QSEECom, QTEEConnector, Gatekeeper and KeyMint are running"
 exit 0
