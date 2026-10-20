@@ -4,5 +4,4 @@ service qseecom-service /vendor/bin/hw/vendor.qti.hardware.qseecom@1.0-service
     user root
     group root drmrpc
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
-    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
     seclabel u:r:recovery:s0
