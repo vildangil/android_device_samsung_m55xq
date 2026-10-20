@@ -1,0 +1,12 @@
+# Samsung M55 secure-stack startup.
+# Keep this separate from qcom_decrypt.rc: the common file also defines
+# Gatekeeper/Keymaster services needed by recovery's FBE implementation.
+service m55-secure-stack-init /system/bin/sh /system/bin/m55-secure-stack-init.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+
+on property:ro.crypto.state=encrypted && property:hwservicemanager.ready=true
+    start m55-secure-stack-init
