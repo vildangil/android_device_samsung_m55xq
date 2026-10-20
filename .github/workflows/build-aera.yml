@@ -208,6 +208,7 @@ jobs:
             "$tmp/partitionmanager.cpp" "$tmp/twrp.cpp"
           python3 "$tree/patches/aera/fix_wlan_config.py" "$tmp/wlan.cpp"
           grep -q 'M55_RECOVERY_WRITABLE_SUPPLICANT_CONF' "$tmp/wlan.cpp"
+          grep -q 'M55_WLAN_SUPP_START_TIMEOUT' "$tmp/wlan.cpp"
           grep -q 'M55_EARLY_KEYMINT_FBE_GUARD' "$tmp/partitionmanager.cpp"
           grep -q 'M55_EARLY_BCB_CLEAR' "$tmp/twrp.cpp"
           grep -q 'M55_PMIC_RESET_FALLBACK' "$tmp/twrp-functions.cpp"
@@ -291,6 +292,8 @@ jobs:
           python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_wlan_config.py" \
             "$GITHUB_WORKSPACE/aera/bootable/recovery/wlan.cpp"
           grep -q 'M55_RECOVERY_WRITABLE_SUPPLICANT_CONF' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/wlan.cpp"
+          grep -q 'M55_WLAN_SUPP_START_TIMEOUT' \
             "$GITHUB_WORKSPACE/aera/bootable/recovery/wlan.cpp"
 
       - name: Reuse existing Samsung Super logical mappings
@@ -466,7 +469,7 @@ jobs:
           crypto="$root/system/lib64/libcrypto.so"
           test -s "$shim"
           test -s "$crypto"
-          test -s "$root/system/bin/hw/wpa_supplicant"
+          test -s "$root/system/bin/wpa_supplicant"
           test -s "$root/system/bin/wpa_cli"
           test -s "$root/init.recovery.wifi.rc"
           test -s "$root/system/bin/aera-wlan-up.sh"
