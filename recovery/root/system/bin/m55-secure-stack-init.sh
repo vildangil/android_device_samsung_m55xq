@@ -63,7 +63,7 @@ if [ -r /vendor/build.prop ]; then
                 key="${line%%=*}"
                 value="${line#*=}"
                 case "$key" in
-                    ro.vendor.*|ro.hardware.*|ro.product.vendor.*|ro.arch)
+                    ro.vendor.*|ro.hardware|ro.hardware.*|ro.product.vendor.*|ro.arch)
                         /system/bin/resetprop "$key" "$value" >/dev/null 2>&1 || true
                         ;;
                 esac
