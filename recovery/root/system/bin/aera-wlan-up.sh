@@ -1,8 +1,8 @@
 #!/system/bin/sh
-# Load the stock M55 QCA6490 WLAN driver from vendor_dlkm without inflating
+# Load only the M55 QCA6750 WLAN driver from vendor_dlkm without inflating
 # recovery.img with a second 25 MiB copy of the proprietary module.
 LOG=/tmp/aera-wlan-up.log
-MODULE_NAME=qca_cld3_qca6490
+MODULE_NAME=qca_cld3_qca6750
 log() { echo "[aera-wlan] $*" >> "$LOG"; }
 
 mkdir -p /tmp/recovery /tmp/recovery/sockets /vendor_dlkm
@@ -68,12 +68,37 @@ if [ -z "$driver" ]; then
 fi
 log "using WLAN driver $driver"
 
+# QCA6750 is built on icnss2, not the QCA6490/kiwi CNSS path.
+# Try Android's dependency-aware modprobe first, falling back to insmod.
+# Stock modules.dep will load icnss2 and its dependencies automatically.
 if ! grep -q "^$MODULE_NAME " /proc/modules; then
-    if ! /system/bin/insmod "$driver" >> "$LOG" 2>&1; then
-        log "ERROR: insmod failed for $driver"
-        exit 1
+    loaded=0
+    if command -v modprobe >/dev/null 2>&1; then
+        for module_dir in /vendor_dlkm/lib/modules /vendor/lib/modules; do
+            [ -f "$module_dir/modules.dep" ] || continue
+            if modprobe -d "$module_dir" "$MODULE_NAME" >> "$LOG" 2>&1; then
+                loaded=1
+                log "loaded $MODULE_NAME via modprobe ($module_dir)"
+                break
+            fi
+        done
     fi
-    log "loaded $MODULE_NAME"
+    if [ "$loaded" != 1 ]; then
+        # On recovery ramdisks without modprobe or a usable modules.dep,
+        # most icnss dependencies may already have been loaded by init.
+        # Attempt the platform module first, then the device WLAN module.
+        if ! grep -q '^icnss2 ' /proc/modules; then
+            for path in /vendor_dlkm/lib/modules/icnss2.ko /vendor/lib/modules/icnss2.ko; do
+                [ -s "$path" ] || continue
+                /system/bin/insmod "$path" >> "$LOG" 2>&1 && break
+            done
+        fi
+        if ! /system/bin/insmod "$driver" >> "$LOG" 2>&1; then
+            log "ERROR: qca6750 insmod failed; check icnss2 and modules.dep"
+            exit 1
+        fi
+        log "loaded $MODULE_NAME via insmod"
+    fi
 else
     log "$MODULE_NAME already loaded"
 fi
@@ -83,7 +108,7 @@ fi
 ready=""
 attempt=0
 while [ "$attempt" -lt 20 ]; do
-    for candidate in /sys/devices/platform/soc/*cnss*/fs_ready; do
+    for candidate in /sys/devices/platform/soc/*cnss*/fs_ready /sys/devices/platform/soc/*qcom,cnss*/fs_ready /sys/kernel/cnss/fs_ready; do
         [ -e "$candidate" ] || continue
         ready="$candidate"
         break
@@ -92,16 +117,16 @@ while [ "$attempt" -lt 20 ]; do
     sleep 1
     attempt=$((attempt + 1))
 done
-if [ -z "$ready" ]; then
-    log "ERROR: no CNSS fs_ready node appeared after driver load"
-    exit 1
+if [ -n "$ready" ]; then
+    # QCA6750/icnss2 may expose no CNSS fs_ready node. It is optional here.
+    if echo 1 > "$ready" 2>> "$LOG"; then
+        log "set $ready to 1"
+    else
+        log "WARNING: could not write $ready; waiting for wlan0 anyway"
+    fi
+else
+    log "no CNSS fs_ready node; normal for some QCA6750/icnss2 setups"
 fi
-chmod 222 "$ready" >> "$LOG" 2>&1 || true
-if ! echo 1 > "$ready" 2>> "$LOG"; then
-    log "ERROR: failed to set $ready"
-    exit 1
-fi
-log "set $ready to 1"
 
 # Wait for the firmware/QMI cold-start to publish wlan0 before starting
 # supplicant. Keep the UI informed with a clear log if the device never appears.
