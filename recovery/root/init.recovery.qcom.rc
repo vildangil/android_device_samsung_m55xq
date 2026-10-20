@@ -60,7 +60,7 @@ on boot
     # Verified on hardware: echo start > /sys/class/remoteproc/remoteproc0/state
     # changes offline -> running and exposes battery/ac/usb/wireless.
     # Firmware partition is mounted earlier in on fs. Do not start the other
-    # remoteprocs; keep the existing KeyMint/FBE startup sequence unchanged.
+    # remoteprocs; m55-secure-stack-init now orders QSEE/QTEE and KeyMint startup.
     wait /sys/class/remoteproc/remoteproc0/state 2
     write /sys/class/remoteproc/remoteproc0/state start
 
