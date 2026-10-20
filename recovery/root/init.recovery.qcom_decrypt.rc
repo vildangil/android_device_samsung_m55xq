@@ -16,5 +16,5 @@ service m55-secure-stack-init /system/bin/sh /system/bin/m55-secure-stack-init.s
     group root
     seclabel u:r:recovery:s0
 
-on property:hwservicemanager.ready=true
+on property:ro.crypto.state=encrypted && property:hwservicemanager.ready=true
     start m55-secure-stack-init
