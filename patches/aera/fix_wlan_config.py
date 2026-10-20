@@ -32,5 +32,5 @@ if source.count(old_timeout) != 1:
         + str(source.count(old_timeout))
     )
 source = source.replace(old, new, 1).replace(old_timeout, new_timeout, 1)
-path.write_text(source.replace(old, new, 1))
+path.write_text(source)
 print("M55 recovery WLAN uses writable /tmp/wpa_supplicant.conf")
