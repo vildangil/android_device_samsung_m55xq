@@ -29,20 +29,36 @@ new_pm = """        DataManager::SetValue(TW_IS_ENCRYPTED, 1);
         // Keystore2, leaving recovery at its splash and its BCB uncleared.
         // Keep userdata encrypted; continue booting the UI. Do not interpret
         // this as successful decryption. Normal decryption is still enabled
-        // on subsequent boots after the secure HAL stack becomes functional.
+        // as soon as the secure HAL stack is functional.
         const bool m55_early_boot =
             android::base::GetProperty("ro.product.device", "") == "m55xq";
-        const std::string m55_keymint =
-            android::base::GetProperty("init.svc.vendor.keymint-default", "");
-        const std::string m55_qsee =
-            android::base::GetProperty("init.svc.qseecom-service", "");
-        const std::string m55_qtee =
-            android::base::GetProperty("init.svc.qteeconnector-hal-1-0", "");
-        if (m55_early_boot &&
-            (m55_keymint != "running" ||
-             m55_qsee != "running" ||
-             m55_qtee != "running")) {
-            LOGINFO("M55 early FBE deferred (KeyMint=%s, QSEE=%s, QTEE=%s):"
+        std::string m55_keymint;
+        std::string m55_qsee;
+        std::string m55_qtee;
+        bool m55_secure_ready = !m55_early_boot;
+        // M55_EARLY_FBE_WAIT: give init time to mount vendor and bring up
+        // qseecomd, QTEEConnector, QSEECom and KeyMint. A single property
+        // snapshot at Process_Fstab entry races these services on cold boot.
+        // Keep the wait bounded: a broken HAL must not hang recovery forever.
+        if (m55_early_boot) {
+            for (int m55_wait = 0; m55_wait < 60; ++m55_wait) {
+                m55_keymint =
+                    android::base::GetProperty("init.svc.vendor.keymint-default", "");
+                m55_qsee =
+                    android::base::GetProperty("init.svc.qseecom-service", "");
+                m55_qtee =
+                    android::base::GetProperty("init.svc.qteeconnector-hal-1-0", "");
+                if (m55_keymint == "running" &&
+                    m55_qsee == "running" &&
+                    m55_qtee == "running") {
+                    m55_secure_ready = true;
+                    break;
+                }
+                sleep(1);
+            }
+        }
+        if (m55_early_boot && !m55_secure_ready) {
+            LOGINFO("M55 early FBE deferred after bounded wait (KeyMint=%s, QSEE=%s, QTEE=%s):"
                     " continue recovery UI with encrypted /data\\n",
                     m55_keymint.c_str(), m55_qsee.c_str(), m55_qtee.c_str());
         } else {
