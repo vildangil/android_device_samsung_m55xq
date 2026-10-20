@@ -7,7 +7,7 @@ which upstream includes in recovery only under OF_ENABLE_WLAN=1.
 Relocate only this translation unit into the common LOCAL_SRC_FILES list.
 
 Guard both source locations so changes to upstream Android.mk fail quickly.
-Do not enable WLAN or alter any KeyMint/FBE/runtime service behavior.
+Keep exactly one source entry regardless of WLAN configuration; do not alter KeyMint/FBE behavior.
 """
 from pathlib import Path
 import sys
