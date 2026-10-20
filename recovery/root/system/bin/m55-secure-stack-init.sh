@@ -26,17 +26,18 @@ wait_service() {
     limit="$2"
     attempt=0
     while [ "$attempt" -lt "$limit" ]; do
-        state="$(/system/bin/getprop "init.svc.$name")"
+        state=$(/system/bin/getprop "init.svc.$name")
         if [ "$state" = "running" ]; then
             # Catch fast registerAsService() failures that immediately exit.
             sleep 1
-            state="$(/system/bin/getprop "init.svc.$name")"
+            state=$(/system/bin/getprop "init.svc.$name")
             [ "$state" = "running" ] && return 0
         fi
         sleep 1
         attempt=$((attempt + 1))
     done
-    log "ERROR: service $name did not stay running (state=$(/system/bin/getprop "init.svc.$name"))"
+    state=$(/system/bin/getprop "init.svc.$name")
+    log "ERROR: service $name did not stay running (state=$state)"
     return 1
 }
 
