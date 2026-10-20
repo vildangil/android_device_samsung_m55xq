@@ -20,7 +20,7 @@ if marker in source:
 old = 'static const char* DEFAULT_SUPP_CONF   = "/vendor/etc/wifi/wpa_supplicant.conf";'
 new = 'static const char* DEFAULT_SUPP_CONF   = "/tmp/wpa_supplicant.conf"; // M55_RECOVERY_WRITABLE_SUPPLICANT_CONF'
 old_timeout = 'if (!WaitForProperty(WLAN_SUPP_SVC_PROP, "running", 20000)) {'
-new_timeout = 'if (!WaitForProperty(WLAN_SUPP_SVC_PROP, "running", 60000)) { // M55_WLAN_SUPP_START_TIMEOUT'
+new_timeout = 'if (!WaitForProperty(WLAN_SUPP_SVC_PROP, "running", 120000)) { // M55_WLAN_SUPP_START_TIMEOUT'
 if source.count(old) != 1:
     raise SystemExit(
         "unexpected upstream AERA WLAN config anchor count="
@@ -32,5 +32,11 @@ if source.count(old_timeout) != 1:
         + str(source.count(old_timeout))
     )
 source = source.replace(old, new, 1).replace(old_timeout, new_timeout, 1)
+# The upstream example mentions a QCA6490 target. M55xq uses QCA6750.
+old_chip_comment = "which brings up the QCA6490 driver on demand"
+new_chip_comment = "which brings up the QCA6750 driver on demand"
+if source.count(old_chip_comment) != 1:
+    raise SystemExit("unexpected upstream WLAN chip comment anchor")
+source = source.replace(old_chip_comment, new_chip_comment, 1)
 path.write_text(source)
 print("M55 recovery WLAN uses writable /tmp/wpa_supplicant.conf")
