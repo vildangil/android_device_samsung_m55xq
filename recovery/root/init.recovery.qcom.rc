@@ -36,8 +36,8 @@ on init
     setprop logd.ready true
     # Stock metadata key was created on Android 16 / 2025-12-01.
     # The TWRP 12.1 ramdisk otherwise advertises Android 12 and 2099 SPL.
-    # KeyMint starts during 'on boot', before prepdecrypt fixes these values.
-    # Align the live props here, before KeyMint can deserialize the key.
+    # Set the stock Android 16 metadata-key version before the secure-stack
+    # helper starts KeyMint after vendor and QSEE/QTEE services are ready.
     # resetprop is provided by TW_INCLUDE_LIBRESETPROP.
     # This ramdisk labels resetprop as rootfs, so exec without an explicit
     # domain fails ("incorrect label or no domain transition").
@@ -49,7 +49,8 @@ on init
 
 on boot
     start health-hal-2-1
-    start vendor.keymint-default
+    # vendor.keymint-default is started by m55-secure-stack-init only after
+    # stock vendor properties and QSEE/QTEE services are ready.
     # Do not block boot waiting for the late DWC3 UDC. The helper retries
     # an unbound ADB gadget in the background after hardware enumerates.
     start m55-usb-late-bind
@@ -86,6 +87,7 @@ on post-fs-data
     mkdir /data/vendor/keymaster 0775 root root
 
 service vendor.keymint-default /system/bin/android.hardware.security.keymint-service
+    disabled
     # Keep Android 16 libcrypto for libkeymaster_portable; preload only
     # Samsung's missing Android 12L sk_delete ABI trampoline.
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib:/sbin
