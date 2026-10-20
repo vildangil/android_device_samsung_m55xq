@@ -174,9 +174,6 @@ def main() -> int:
 extern size_t OPENSSL_sk_num(const void *);
 extern void *OPENSSL_sk_value(const void *, size_t);
 extern void OPENSSL_sk_free(void *);
-static void m55_call_free_func_legacy(void (*func)(void *), void *ptr) {
-    func(ptr);
-}
 static void m55_sk_pop_free_ex(
     void *s,
     void (*call_free_func)(void (*)(void *), void *),
@@ -185,11 +182,17 @@ static void m55_sk_pop_free_ex(
     size_t count = OPENSSL_sk_num(s);
     for (size_t i = 0; i < count; ++i) {
         void *item = OPENSSL_sk_value(s, i);
-        if (item != NULL) call_free_func(free_func, item);
+        call_free_func(free_func, item);
     }
     OPENSSL_sk_free(s);
 }
 """
+        if "sk_pop_free" in required_stack_symbols:
+            helper_source = """\\
+static void m55_call_free_func_legacy(void (*func)(void *), void *ptr) {
+    func(ptr);
+}
+""" + helper_source
     source_file.write_text(
         "#include <stddef.h>\n"
         + helper_source
