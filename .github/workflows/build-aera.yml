@@ -150,6 +150,42 @@ jobs:
           curl --fail --location --silent --show-error --retry 3 \
             "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/partitionmanager.cpp" \
             -o "$tmp/partitionmanager.cpp"
+          # Fail fast on any unsupported proprietary Samsung stack ABI symbol.
+          # Uses only the checked-out device blob and the shim's AST; no Android
+          # tree sync is needed to detect an unsupported legacy symbol.
+          python3 - "$tree" <<'PY'
+          import ast, pathlib, subprocess, sys
+          tree = pathlib.Path(sys.argv[1])
+          script = tree / "patches/aera/stage_vndk32_keymint.py"
+          nodes = ast.parse(script.read_text())
+          compatible = None
+          for node in ast.walk(nodes):
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(target, ast.Name) and target.id == "compatible"
+                  for target in node.targets
+              ):
+                  compatible = ast.literal_eval(node.value)
+                  break
+          if compatible is None:
+              raise SystemExit("Cannot find KeyMint compatibility table")
+          blob = tree / "recovery/root/vendor/lib64/libskeymint_cli.so"
+          symbols = subprocess.check_output(
+              ["readelf", "-W", "--dyn-syms", str(blob)], text=True
+          )
+          needed = {
+              cols[7].split("@")[0]
+              for row in symbols.splitlines()
+              if len(cols := row.split()) >= 8 and cols[6] == "UND"
+              and cols[7].startswith("sk_")
+          }
+          print("Samsung legacy stack symbols:", sorted(needed), flush=True)
+          if not needed:
+              raise SystemExit("Samsung KeyMint stack imports not found")
+          missing = needed - set(compatible)
+          if missing:
+              raise SystemExit("Unsupported Samsung KeyMint ABI: " + str(sorted(missing)))
+          print("Samsung legacy KeyMint symbol coverage: complete", flush=True)
+          PY
           python3 -m py_compile \
             "$tree/patches/aera/fix_reboot_reasons.py" \
             "$tree/patches/aera/skip_failed_keymint_decrypt.py" \
