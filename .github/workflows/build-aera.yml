@@ -229,6 +229,23 @@ jobs:
           grep -q 'M55_EARLY_BCB_CLEAR' "$tmp/twrp.cpp"
           grep -q 'M55_PMIC_RESET_FALLBACK' "$tmp/twrp-functions.cpp"
           grep -q 'M55_GUARD_BROKEN_KEYMINT_DECRYPT' "$tmp/twrp.cpp"
+          # Validate generated C++ loop syntax and the exact device WLAN driver
+          # before Soong spends 1-2 hours compiling Android 16 recovery.
+          sh -n "$tree/recovery/root/system/bin/aera-wlan-up.sh"
+          sh -n "$tree/recovery/root/system/bin/m55-secure-stack-init.sh"
+          python3 - "$tmp/partitionmanager.cpp" "$tree/recovery/root/system/bin/aera-wlan-up.sh" <<'PY'
+          import pathlib, sys
+          cpp = pathlib.Path(sys.argv[1]).read_text()
+          wifi = pathlib.Path(sys.argv[2]).read_text()
+          expected = "for (int m55_wait = 0; m55_wait < 75; ++m55_wait) {"
+          if cpp.count(expected) != 1:
+              raise SystemExit("Invalid generated M55 FBE wait-loop syntax")
+          if wifi.count("MODULE_NAME=qca_cld3_qca6750") != 1:
+              raise SystemExit("M55 WLAN must select exactly QCA6750")
+          if "qca_cld3_qca6490" in wifi or "qca_cld3_kiwi" in wifi:
+              raise SystemExit("Unexpected QCA6490/kiwi WLAN driver in M55 script")
+          print("M55 generated FBE loop and QCA6750-only WLAN verified")
+          PY
           echo "Upstream AERA patch preflight passed before full source sync"
 
       - name: Reclaim runner disk
