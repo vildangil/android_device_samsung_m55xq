@@ -139,13 +139,17 @@ def main() -> int:
         "sk_insert": ('int sk_insert(void *s, void *p, size_t i)',
                       'return OPENSSL_sk_insert(s,p,i);',
                       'extern int OPENSSL_sk_insert(void *, void *, size_t);'),
-        "sk_pop_free": ('void sk_pop_free(void *s, void (*f)(void *))',
-                        'OPENSSL_sk_pop_free(s,f);',
-                        'extern void OPENSSL_sk_pop_free(void *, void (*)(void *));'),
+        # Android 16 libcrypto does not export OPENSSL_sk_pop_free[ _ex ].
+        # Implement the historical wrappers using the exported stack primitives.
+        "sk_pop_free": (
+            'void sk_pop_free(void *s, void (*f)(void *))',
+            'm55_sk_pop_free_ex(s,m55_call_free_func_legacy,f);',
+            '',
+        ),
         "sk_pop_free_ex": (
             'void sk_pop_free_ex(void *s, void (*call_free_func)(void (*)(void *), void *), void (*free_func)(void *))',
-            'OPENSSL_sk_pop_free_ex(s,call_free_func,free_func);',
-            'extern void OPENSSL_sk_pop_free_ex(void *, void (*)(void (*)(void *), void *), void (*)(void *));',
+            'm55_sk_pop_free_ex(s,call_free_func,free_func);',
+            '',
         ),
         "sk_new": ('void *sk_new(int (*f)(const void *, const void *))',
                    'return OPENSSL_sk_new(f);',
@@ -164,8 +168,31 @@ def main() -> int:
     if not required_stack_symbols:
         parser.error("expected Samsung legacy sk_* imports but none were found")
     definitions = [compatible[name] for name in required_stack_symbols]
+    helper_source = ""
+    if {"sk_pop_free", "sk_pop_free_ex"} & set(required_stack_symbols):
+        helper_source = """\
+extern size_t OPENSSL_sk_num(const void *);
+extern void *OPENSSL_sk_value(const void *, size_t);
+extern void OPENSSL_sk_free(void *);
+static void m55_call_free_func_legacy(void (*func)(void *), void *ptr) {
+    func(ptr);
+}
+static void m55_sk_pop_free_ex(
+    void *s,
+    void (*call_free_func)(void (*)(void *), void *),
+    void (*free_func)(void *)) {
+    if (s == NULL) return;
+    size_t count = OPENSSL_sk_num(s);
+    for (size_t i = 0; i < count; ++i) {
+        void *item = OPENSSL_sk_value(s, i);
+        if (item != NULL) call_free_func(free_func, item);
+    }
+    OPENSSL_sk_free(s);
+}
+"""
     source_file.write_text(
         "#include <stddef.h>\n"
+        + helper_source
         + "\n".join(entry[2] for entry in definitions)
         + "\n"
         + "\n".join(
@@ -174,6 +201,9 @@ def main() -> int:
             for entry in definitions
         ) + "\n"
     )
+    generated_source = source_file.read_text()
+    if "OPENSSL_sk_pop_free(" in generated_source or "OPENSSL_sk_pop_free_ex(" in generated_source:
+        parser.error("KeyMint shim must not import unavailable OPENSSL_sk_pop_free APIs")
     print("Samsung KeyMint required sk_* exports:", required_stack_symbols, flush=True)
     compat = compat_dir / "libm55_keymint_compat.so"
     subprocess.run(
