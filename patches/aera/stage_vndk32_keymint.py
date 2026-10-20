@@ -142,6 +142,11 @@ def main() -> int:
         "sk_pop_free": ('void sk_pop_free(void *s, void (*f)(void *))',
                         'OPENSSL_sk_pop_free(s,f);',
                         'extern void OPENSSL_sk_pop_free(void *, void (*)(void *));'),
+        "sk_pop_free_ex": (
+            'void sk_pop_free_ex(void *s, void (*call_free_func)(void (*)(void *), void *), void (*free_func)(void *))',
+            'OPENSSL_sk_pop_free_ex(s,call_free_func,free_func);',
+            'extern void OPENSSL_sk_pop_free_ex(void *, void (*)(void (*)(void *), void *), void (*)(void *));',
+        ),
         "sk_new": ('void *sk_new(int (*f)(const void *, const void *))',
                    'return OPENSSL_sk_new(f);',
                    'extern void *OPENSSL_sk_new(int (*)(const void *, const void *));'),
@@ -149,6 +154,7 @@ def main() -> int:
                     'return OPENSSL_sk_find(s,i,p);',
                     'extern int OPENSSL_sk_find(const void *, size_t *, const void *);'),
     }
+    print("Samsung KeyMint required legacy sk_* exports:", required_stack_symbols, flush=True)
     unknown = set(required_stack_symbols) - set(compatible)
     if unknown:
         parser.error(
