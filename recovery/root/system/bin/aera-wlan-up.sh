@@ -36,6 +36,12 @@ find_driver() {
     return 1
 }
 
+# The WLAN firmware config is in the stock vendor partition. Make it available
+# before the driver signals fs_ready and starts its firmware/QMI sequence.
+if [ ! -r /vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini ]; then
+    mount_ro_if_needed /vendor /dev/block/by-name/vendor || true
+fi
+
 driver="$(find_driver 2>/dev/null || true)"
 if [ -z "$driver" ]; then
     mount_ro_if_needed /vendor_dlkm /dev/block/by-name/vendor_dlkm || true
