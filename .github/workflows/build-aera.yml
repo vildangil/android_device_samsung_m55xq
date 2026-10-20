@@ -490,7 +490,12 @@ jobs:
           test -s "$root/init.recovery.wifi.rc"
           test -s "$root/system/bin/aera-wlan-up.sh"
           test -s "$root/init.recovery.qcom_decrypt.rc"
-          grep -q 'service qseecomd /system/bin/qseecomd' "$root/init.recovery.qcom_decrypt.rc"
+          grep -R -q --include='*.rc' 'service qseecomd ' "$root"
+          if grep -R -q --include='*.rc' 'service qseecomd /sbin/qseecomd' "$root"; then
+            test -e "$root/sbin/qseecomd"
+          else
+            test -s "$root/system/bin/qseecomd"
+          fi
           test -s "$root/init.recovery.m55_secure_stack.rc"
           test -s "$root/system/bin/m55-secure-stack-init.sh"
           test -s "$root/vendor/etc/vintf/manifest/vendor.qti.hardware.qseecom@1.0-service.xml"
