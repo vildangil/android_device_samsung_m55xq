@@ -99,6 +99,7 @@ jobs:
           grep -q 'AERA_INCLUDE_CRYPTO := true' "$tree/BoardConfig.mk"
           grep -q 'AERA_INCLUDE_FBE_METADATA_DECRYPT := true' "$tree/BoardConfig.mk"
           grep -q 'AERA_INCLUDE_CRYPTO_FBE := true' "$tree/BoardConfig.mk"
+          grep -q 'OF_ENABLE_WLAN := 1' "$tree/BoardConfig.mk"
           grep -q 'PLATFORM_SECURITY_PATCH := 2025-12-01' "$tree/BoardConfig.mk"
           # Android 16 fsgen enforces unique members in each super group.
           # Check BEFORE the ~15-minute repo sync / memory-heavy Soong step.
@@ -130,8 +131,12 @@ jobs:
           test -s "$tree/recovery/root/vendor/etc/init/hermesd.rc"
           test -s "$tree/recovery/root/vendor/etc/vintf/manifest/iweaver_v1_manifest.xml"
           test -s "$tree/recovery/root/system/bin/hermesd-autostart.sh"
+          test -s "$tree/recovery/root/init.recovery.wifi.rc"
+          grep -q 'import /init.recovery.wifi.rc' "$tree/recovery/root/init.recovery.qcom.rc"
+          test -s "$tree/recovery/root/system/bin/aera-wlan-up.sh"
           test -s "$tree/patches/aera/fix_aera_secrets_link.py"
-          echo "M55 Hermes, FBE and KeyMint source preflight passed"
+          test -s "$tree/patches/aera/fix_wlan_config.py"
+          echo "M55 Hermes, FBE, KeyMint and Wi-Fi source preflight passed"
 
       - name: Preflight AERA C++ patch anchors before costly repo sync
         shell: bash
@@ -150,6 +155,9 @@ jobs:
           curl --fail --location --silent --show-error --retry 3 \
             "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/partitionmanager.cpp" \
             -o "$tmp/partitionmanager.cpp"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://raw.githubusercontent.com/AERA-Recovery/android_bootable_recovery/aera-16.0/wlan.cpp" \
+            -o "$tmp/wlan.cpp"
           # Fail fast on any unsupported proprietary Samsung stack ABI symbol.
           # Uses only the checked-out device blob and the shim's AST; no Android
           # tree sync is needed to detect an unsupported legacy symbol.
@@ -190,6 +198,7 @@ jobs:
             "$tree/patches/aera/fix_reboot_reasons.py" \
             "$tree/patches/aera/skip_failed_keymint_decrypt.py" \
             "$tree/patches/aera/fix_early_boot_fbe.py" \
+            "$tree/patches/aera/fix_wlan_config.py" \
             "$tree/patches/aera/stage_vndk32_keymint.py"
           python3 "$tree/patches/aera/fix_reboot_reasons.py" \
             "$tmp/twrp-functions.cpp"
@@ -197,6 +206,8 @@ jobs:
             "$tmp/twrp.cpp"
           python3 "$tree/patches/aera/fix_early_boot_fbe.py" \
             "$tmp/partitionmanager.cpp" "$tmp/twrp.cpp"
+          python3 "$tree/patches/aera/fix_wlan_config.py" "$tmp/wlan.cpp"
+          grep -q 'M55_RECOVERY_WRITABLE_SUPPLICANT_CONF' "$tmp/wlan.cpp"
           grep -q 'M55_EARLY_KEYMINT_FBE_GUARD' "$tmp/partitionmanager.cpp"
           grep -q 'M55_EARLY_BCB_CLEAR' "$tmp/twrp.cpp"
           grep -q 'M55_PMIC_RESET_FALLBACK' "$tmp/twrp-functions.cpp"
@@ -254,18 +265,33 @@ jobs:
           test -f build/envsetup.sh
           test -f bootable/recovery/aera_build.mk
           test -f vendor/recovery/AERA_A16.sh
+          if [[ ! -f external/wpa_supplicant_8/Android.bp ]]; then
+            echo "AOSP Wi-Fi supplicant sources absent from manifest; fetching Android 16 branch"
+            rm -rf external/wpa_supplicant_8
+            git clone --depth=1 -b android16-s2-release \
+              https://android.googlesource.com/platform/external/wpa_supplicant_8 \
+              external/wpa_supplicant_8
+          fi
+          test -f external/wpa_supplicant_8/Android.bp
 
       - name: Patch upstream AERA secrets linker configuration
         shell: bash
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/aera"
-          # Upstream Android.mk compiles AeraSecrets only if OF_ENABLE_WLAN=1,
-          # but libaera_recovery_host uses secrets with WLAN disabled.
-          # Keep Wi-Fi disabled and compile just the credentials translation
-          # unit unconditionally, avoiding extra device-specific dependencies.
+          # WLAN is enabled for M55. Move AeraSecrets into the common source list
+          # so its symbols are compiled exactly once for both the host UI and WLAN.
           python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_aera_secrets_link.py"
           grep -n -F 'aera_secrets/aera_secrets.cpp' bootable/recovery/Android.mk
+
+      - name: Configure writable recovery Wi-Fi supplicant
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/device_tree/patches/aera/fix_wlan_config.py" \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/wlan.cpp"
+          grep -q 'M55_RECOVERY_WRITABLE_SUPPLICANT_CONF' \
+            "$GITHUB_WORKSPACE/aera/bootable/recovery/wlan.cpp"
 
       - name: Reuse existing Samsung Super logical mappings
         shell: bash
@@ -430,6 +456,34 @@ jobs:
             # disk-safe swap is enabled above if enough storage is free.
             mka -j2 adbd recoveryimage
           } 2>&1 | tee "$RUNNER_TEMP/aera-build.log"
+
+      - name: Validate KeyMint shim and Wi-Fi payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/aera/out/target/product/m55xq/recovery/root"
+          shim="$root/system/lib64/keymint-compat/libm55_keymint_compat.so"
+          crypto="$root/system/lib64/libcrypto.so"
+          test -s "$shim"
+          test -s "$crypto"
+          test -s "$root/system/bin/hw/wpa_supplicant"
+          test -s "$root/system/bin/wpa_cli"
+          test -s "$root/init.recovery.wifi.rc"
+          test -s "$root/system/bin/aera-wlan-up.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          readelf -W --dyn-syms "$crypto" | awk '$7 != "UND" { n=$8; sub(/@.*/, "", n); print n }' | sort -u > "$tmp/crypto.exports"
+          readelf -W --dyn-syms "$shim" | awk '$7 == "UND" && $8 ~ /^OPENSSL_sk_/ { n=$8; sub(/@.*/, "", n); print n }' | sort -u > "$tmp/shim.openssl.undefined"
+          missing="$(comm -23 "$tmp/shim.openssl.undefined" "$tmp/crypto.exports")"
+          if [[ -n "$missing" ]]; then
+            printf '::error::KeyMint shim imports symbols missing from Android 16 libcrypto:\n%s\n' "$missing"
+            exit 1
+          fi
+          if readelf -W --dyn-syms "$shim" | grep -q 'OPENSSL_sk_pop_free'; then
+            echo "::error::KeyMint shim still imports unavailable OPENSSL_sk_pop_free API"
+            exit 1
+          fi
+          echo "KeyMint shim dynamic symbols and recovery Wi-Fi payload validated"
 
       - name: Verify image, partition size and make Odin package
         shell: bash
