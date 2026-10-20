@@ -117,6 +117,8 @@ BOARD_SAMSUNG_DYNAMIC_PARTITIONS_SIZE := 9122611200 # TODO: Fix hardcoded value
 
 # Recovery
 RECOVERY_SDCARD_ON_DATA := true
+# AERA Wi-Fi UI and supplicant; the Qualcomm WLAN module is loaded on demand.
+OF_ENABLE_WLAN := 1
 TARGET_RECOVERY_QCOM_RTC_FIX := true
 BOARD_INCLUDE_RECOVERY_DTBO := true
 BOARD_KERNEL_SEPARATED_DTBO := true
