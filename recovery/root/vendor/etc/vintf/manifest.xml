@@ -66,16 +66,7 @@
         </interface>
         <fqname>@2.7::ICameraProvider/legacy/1</fqname>
     </hal>
-    <hal format="hidl" override="true">
-        <name>android.hardware.gatekeeper</name>
-        <transport>hwbinder</transport>
-        <version>1.0</version>
-        <interface>
-            <name>IGatekeeper</name>
-            <instance>default</instance>
-        </interface>
-        <fqname>@1.0::IGatekeeper/default</fqname>
-    </hal>
+    
     <hal format="hidl">
         <name>android.hardware.media.omx</name>
         <transport>hwbinder</transport>
