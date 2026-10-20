@@ -25,6 +25,7 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 import /init.recovery.qcom_decrypt.rc
+import /init.recovery.m55_secure_stack.rc
 import /init.recovery.samsung.rc
 import /init.recovery.wifi.rc
 
