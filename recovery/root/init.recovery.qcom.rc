@@ -65,6 +65,12 @@ on boot
     wait /sys/class/remoteproc/remoteproc0/state 2
     write /sys/class/remoteproc/remoteproc0/state start
 
+# The stock init action for mtp,adb does not bind the functionfs gadget on
+# this recovery ramdisk. On-device testing confirmed switching to 'adb' alone
+# enumerates reliably. Only override the broken combo inside recovery.
+on property:sys.usb.config=mtp,adb && property:sys.usb.configfs=1
+    setprop sys.usb.config adb
+
 on property:ro.boot.usbcontroller=*
 #    setprop sys.usb.controller ${ro.boot.usbcontroller}
     wait /sys/bus/platform/devices/${ro.boot.usb.dwc3_msm:-a600000.ssusb}/mode
