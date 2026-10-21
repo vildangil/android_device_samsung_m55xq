@@ -58,6 +58,15 @@ new_pm = """        DataManager::SetValue(TW_IS_ENCRYPTED, 1);
                     m55_secure_ready = true;
                     break;
                 }
+                // Do not wait out all 75 seconds if the one-shot helper
+                // has already failed to start the secure stack.
+                if (m55_wait >= 5 &&
+                    android::base::GetProperty(
+                        "init.svc.m55-secure-stack-init", "") == "stopped") {
+                    LOGINFO("M55: secure-stack helper finished without all HALs; "
+                            "skip the remaining FBE startup wait\\n");
+                    break;
+                }
                 sleep(1);
             }
         }
