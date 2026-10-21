@@ -103,6 +103,17 @@ else
     log "$MODULE_NAME already loaded"
 fi
 
+# The M55's Subhu custom kernel must use WLAN modules built from the
+# SAME kernel tree/Module.symvers. The stock vendor_dlkm modules currently
+# disagree about module_layout and many cfg80211/icnss symbols. Do not wait
+# another 80 seconds for wlan0 when the module ABI is demonstrably invalid.
+if [ ! -d /sys/class/net/wlan0 ] &&
+   dmesg 2>/dev/null | grep -F -q "$MODULE_NAME: disagrees about version of symbol module_layout"; then
+    log "ERROR: qca6750 vendor_dlkm module ABI does not match running kernel $(uname -r)"
+    log "Use qca6750 and its dependencies rebuilt against the currently booted kernel"
+    exit 1
+fi
+
 # Qualcomm CNSS will not finish firmware bring-up until fs_ready is set.
 # Search dynamically so the script works with the stock CNSS platform node.
 ready=""
