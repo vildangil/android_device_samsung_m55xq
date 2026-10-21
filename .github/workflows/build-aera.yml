@@ -144,6 +144,13 @@ jobs:
           test -s "$tree/recovery/root/vendor/etc/vintf/manifest/vendor.qti.hardware.qteeconnector@1.0-service.xml"
           test -s "$tree/recovery/root/vendor/etc/vintf/manifest/android.hardware.gatekeeper@1.0-service.xml"
           grep -q 'service m55-secure-stack-init' "$tree/recovery/root/init.recovery.m55_secure_stack.rc"
+          grep -F -q 'on property:hwservicemanager.ready=true && property:twrp.super.symlinks_created=true' "$tree/recovery/root/init.recovery.m55_secure_stack.rc"
+          if grep -F -q 'property:ro.crypto.state=encrypted' "$tree/recovery/root/init.recovery.m55_secure_stack.rc"; then
+            echo "::error::Recovery has no ro.crypto.state=encrypted property: secure stack would never start"
+            exit 1
+          fi
+          grep -F -q 'on property:sys.usb.config=mtp,adb && property:sys.usb.configfs=1' "$tree/recovery/root/init.recovery.qcom.rc"
+          grep -F -q 'setprop sys.usb.config adb' "$tree/recovery/root/init.recovery.qcom.rc"
           python3 -c 'import sys, xml.etree.ElementTree as ET; [ET.parse(p) for p in sys.argv[1:]]' \
             "$tree/recovery/root/vendor/etc/vintf/manifest/vendor.qti.hardware.qseecom@1.0-service.xml" \
             "$tree/recovery/root/vendor/etc/vintf/manifest/vendor.qti.hardware.qteeconnector@1.0-service.xml" \
