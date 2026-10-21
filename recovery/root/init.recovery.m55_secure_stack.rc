@@ -8,5 +8,9 @@ service m55-secure-stack-init /system/bin/sh /system/bin/m55-secure-stack-init.s
     group root
     seclabel u:r:recovery:s0
 
-on property:ro.crypto.state=encrypted && property:hwservicemanager.ready=true
+# On Samsung M55 recovery ro.crypto.state is absent until decryption runs.
+# That made this action impossible to fire and left all secure services
+# undefined/stopped while Process_Fstab waited 75 seconds. Wait instead for
+# hwservicemanager and the dynamic vendor block mapper to become ready.
+on property:hwservicemanager.ready=true && property:twrp.super.symlinks_created=true
     start m55-secure-stack-init
